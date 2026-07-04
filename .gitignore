@@ -1,0 +1,30 @@
+# Runtime data (root-level only - scripts/data/ holds a bundled asset, keep that)
+/data/
+/output/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Credentials (never commit)
+*.pem
+*.key
+credentials/
+config/settings.yaml
+
+# Logs
+*.log

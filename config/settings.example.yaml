@@ -1,0 +1,35 @@
+# MoatDaily Settings - EXAMPLE
+# Copy this to settings.yaml and fill in real values. settings.yaml is gitignored
+# and must never be committed.
+
+news:
+  currents_api_key: ""       # optional - Google News RSS + publisher RSS work without it
+  brave_api_key: ""          # optional - used as an image-search fallback
+  max_articles_per_fetch: 30
+  max_age_hours: 24          # drop any article older than this (or with no parseable date)
+  categories:
+    - technology
+    - business
+    - startup
+    - ai
+
+sheets:
+  spreadsheet_id: ""
+  credentials_path: "/path/to/your/gcp-service-account.json"
+  worksheet_name: "Posts"
+
+instagram:
+  access_token: ""           # long-lived token, leave blank to keep publishing inert
+  ig_user_id: ""              # Instagram Business/Creator account id
+  public_base_url: ""        # public URL mirroring output/posts/ (Graph API fetches media by URL, not raw bytes)
+
+posting:
+  daily_post_count: 4  # 3-6 range, start with 4
+  post_types:
+    - static
+    - carousel
+  retry_limit: 3
+
+output:
+  posts_dir: "output/posts"
+  data_dir: "data"

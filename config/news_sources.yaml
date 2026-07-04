@@ -1,0 +1,115 @@
+# News Sources Configuration
+# Discovery layers, all free / no key required for the primary two:
+#   1. Google News search RSS (google_news_queries below) - Google's own India news
+#      ranking, per-vertical query buckets, closest thing to "a human googling every morning"
+#   2. Publisher RSS feeds (rss_feeds below) - trusted, curated sources
+#   3. Currents API (optional) - used only if a key is configured in settings.yaml
+
+api:
+  currents:
+    base_url: "https://api.currentsapi.services/v1"
+    endpoints:
+      latest: "/latest-news"
+      search: "/search"
+    default_params:
+      language: "en"
+      country: "IN"
+    categories:
+      - technology
+      - business
+      - startup
+      - ai
+
+# Google News search RSS, bucketed per vertical so all four get guaranteed
+# coverage every run (AI used to only leak in via tech feeds + keyword bonus).
+# URL pattern: news.google.com/rss/search?q=<query>+when:1d&hl=en-IN&gl=IN&ceid=IN:en
+google_news_queries:
+  startup:
+    - "Indian startup funding"
+    - "Indian startup"
+    - "Shark Tank India"
+    - "India unicorn"
+    - "seed round India"
+  business:
+    - "SEBI"
+    - "RBI"
+    - "Sensex Nifty"
+    - "India IPO"
+    - "India acquisition"
+    - "Indian economy"
+  tech:
+    - "India tech"
+    - "smartphone launch India"
+    - "India IT sector"
+    - "gadget launch India"
+  ai:
+    - "India AI"
+    - "OpenAI"
+    - "ChatGPT Gemini"
+    - "Nvidia AI"
+    - "AI startup India"
+
+rss_feeds:
+  india_startup:
+    - name: "Economic Times Tech"
+      url: "https://economictimes.indiatimes.com/tech/rssfeeds/13357270.cms"
+      weight: 9
+    - name: "StartupTalky"
+      url: "https://startuptalky.com/feed/"
+      weight: 8
+    - name: "Inc42"
+      url: "https://inc42.com/feed/"
+      weight: 9
+    - name: "YourStory"
+      url: "https://yourstory.com/feed"
+      weight: 8
+    - name: "Indian Express Tech"
+      url: "https://indianexpress.com/section/technology/feed/"
+      weight: 7
+
+  global_tech:
+    - name: "TechCrunch"
+      url: "https://techcrunch.com/feed/"
+      weight: 9
+    - name: "The Verge"
+      url: "https://www.theverge.com/rss/index.xml"
+      weight: 7
+    - name: "Wired"
+      url: "https://www.wired.com/feed/rss"
+      weight: 6
+    - name: "Ars Technica"
+      url: "https://feeds.arstechnica.com/arstechnica/index"
+      weight: 6
+
+  business:
+    - name: "Moneycontrol"
+      url: "https://www.moneycontrol.com/rss/latestnews.xml"
+      weight: 8
+    - name: "LiveMint"
+      url: "https://www.livemint.com/rss/companies"
+      weight: 8
+    - name: "Forbes India"
+      url: "https://www.forbesindia.com/rss/feed.xml"
+      weight: 7
+
+  ai:
+    - name: "Analytics India Magazine"
+      url: "https://analyticsindiamag.com/feed/"
+      weight: 8
+    - name: "VentureBeat AI"
+      url: "https://venturebeat.com/category/ai/feed/"
+      weight: 7
+    - name: "MIT Technology Review"
+      url: "https://www.technologyreview.com/feed/"
+      weight: 6
+
+# Filtering weights for India relevance scoring
+relevance_signals:
+  india_keywords:
+    high: ["India", "Indian", "Bengaluru", "Mumbai", "Delhi", "Hyderabad", "crore", "lakh", "rupee", "₹", "SEBI", "RBI", "UPI", "Aadhaar", "Shark Tank India", "IPO BSE", "NSE", "Sensex", "Nifty"]
+    medium: ["Asia", "emerging market", "Global South", "BRICS", "Southeast Asia"]
+  skip_keywords: ["local election", "county", "state legislature", "NFL", "NBA", "MLB", "Premier League"]
+
+  engagement_signals:
+    high: ["funding", "acquisition", "IPO", "layoff", "controversy", "ban", "launch", "rebrand", "vs", "billion", "million", "record", "first ever", "broke", "surpass"]
+    medium: ["partnership", "expansion", "hiring", "report", "update", "feature"]

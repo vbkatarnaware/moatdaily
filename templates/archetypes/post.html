@@ -1,0 +1,53 @@
+{% extends "_base.html" %}
+
+{#
+  The one and only static layout: reserved photo zone (top) + solid text panel
+  (bottom). The real photo carries the post; text never sits over the subject.
+  hero.kind: "photo" (pre-fit to the photo zone) | "cutout" (isolated subject,
+  floats within the zone) | "none" (branded glow fallback)
+#}
+
+{% block extra_style %}
+.kicker {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    margin-bottom: 18px;
+}
+.headline {
+    font-size: 62px;
+    font-weight: 500;
+    line-height: 1.14;
+    letter-spacing: -1.5px;
+    color: var(--text-primary);
+}
+.subline {
+    font-size: 29px;
+    font-weight: 400;
+    color: var(--text-secondary);
+    line-height: 1.46;
+    margin-top: 22px;
+}
+{% endblock %}
+
+{% block content %}
+<div class="photo-zone">
+    {% if hero.kind == "cutout" %}
+    <div class="glow-bg"></div>
+    <img src="{{ hero.data_uri }}" class="hero-cutout" alt="">
+    {% elif hero.kind == "photo" %}
+    <img src="{{ hero.data_uri }}" class="hero-photo" alt="">
+    {% else %}
+    <div class="glow-bg"></div>
+    {% endif %}
+    <div class="feather"></div>
+</div>
+{% endblock %}
+
+{% block panel_content %}
+{% if kicker %}<div class="kicker">{{ kicker }}</div>{% endif %}
+<h1 class="headline">{{ headline_html }}</h1>
+{% if subline %}<p class="subline">{{ subline }}</p>{% endif %}
+{% endblock %}

@@ -1,0 +1,60 @@
+{% extends "_base.html" %}
+
+{#
+  4:5 (1080x1350) carousel slide - same reserved photo zone / panel split as
+  post.html. The per-slide text lives in the panel, never over the image.
+#}
+
+{% block extra_style %}
+.slide-counter {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--accent-light);
+    letter-spacing: 4px;
+    margin-bottom: 20px;
+}
+.slide-text {
+    font-size: 54px;
+    font-weight: 500;
+    line-height: 1.22;
+    letter-spacing: -1px;
+    color: var(--text-primary);
+}
+.swipe-indicator {
+    font-size: 22px;
+    font-weight: 400;
+    color: var(--text-secondary);
+    letter-spacing: 0.5px;
+}
+.swipe-indicator .arrow { color: var(--accent-light); }
+{% endblock %}
+
+{% block content %}
+<div class="photo-zone">
+    {% if hero and hero.kind == "cutout" %}
+    <div class="glow-bg"></div>
+    <img src="{{ hero.data_uri }}" class="hero-cutout" alt="">
+    {% elif hero and hero.kind == "photo" %}
+    <img src="{{ hero.data_uri }}" class="hero-photo" alt="">
+    {% else %}
+    <div class="glow-bg"></div>
+    {% endif %}
+    <div class="feather"></div>
+</div>
+{% endblock %}
+
+{% block panel_content %}
+<div class="slide-counter">{{ current_slide }} / {{ total_slides }}</div>
+<h1 class="slide-text">{{ text_html }}</h1>
+{% endblock %}
+
+{% block brand_row %}
+<div class="brand-handle">{{ brand.handle }}</div>
+<div class="swipe-indicator">
+    {% if current_slide < total_slides %}
+        SWIPE <span class="arrow">&rarr;</span>
+    {% else %}
+        COMMENT BELOW <span class="arrow">&darr;</span>
+    {% endif %}
+</div>
+{% endblock %}

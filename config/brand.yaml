@@ -1,0 +1,86 @@
+# MoatDaily Brand Identity
+# Accent: Electric Violet - distinct from competitors (Red=MarketingMind, Blue=101xf, Yellow=Maverick)
+
+brand:
+  name: "MoatDaily"
+  handle: "@moatdaily"
+  tagline: "News that moves markets."
+
+colors:
+  background: "#0A0A0A"          # Near-black
+  background_gradient: "#1A1A2E"  # Dark navy hint
+  text_primary: "#FFFFFF"         # White headlines
+  text_secondary: "#B0B0B0"      # Gray sublines
+  accent: "#8B5CF6"               # Electric Violet - highlight keywords
+  accent_light: "#A78BFA"         # Lighter violet for secondary highlights
+  brand_bar: "#111111"            # Slightly lighter black for bottom bar
+  accent_glow: "#8B5CF640"        # Violet with 25% opacity for glow effects
+
+typography:
+  headline_font: "Inter-Black"    # Inter Black 900
+  headline_font_path: "templates/fonts/Inter-Black.ttf"
+  subline_font: "Inter-Regular"
+  subline_font_path: "templates/fonts/Inter-Regular.ttf"
+  brand_font: "Inter-Bold"
+  brand_font_path: "templates/fonts/Inter-Bold.ttf"
+  headline_size: 64
+  subline_size: 28
+  brand_size: 20
+  caption_max_chars: 2200
+
+layout:
+  post_width: 1080
+  post_height: 1350              # 4:5, both static and carousel
+  square_size: 1080              # (unused - carousel is 4:5, not square)
+  padding: 60
+  brand_bar_height: 70
+  text_block_padding: 40
+
+# Reserved-panel composition (101xf-style): the canvas splits into a photo zone
+# on top and a solid text panel on the bottom. The subject always lives in the
+# photo zone; the headline always lives in the panel. They never overlap, so a
+# real photo's subject can never end up hidden under the text.
+panel_layout:
+  photo_zone_ratio: 0.62         # top 62% of post_height = photo zone (1080x837)
+  feather_px: 120                # gradient blend where photo meets the panel
+  panel_bg: "#111111"            # solid panel color (brand_bar shade, not pure black)
+
+logo:
+  type: "text"                   # Text-only logo
+  text: "MoatDaily"
+  font_path: "templates/fonts/Inter-Bold.ttf"
+  font_size: 18
+
+# Single editorial template - every static post uses templates/archetypes/post.html.
+# The real photo carries the post; the layout stays minimal and consistent.
+
+# Image treatment - the renderer pre-composites every hero to fill the PHOTO ZONE
+# (panel_layout.photo_zone_ratio), not the full canvas:
+#   - Source aspect ratio reasonably close to the zone ratio -> subject-aware
+#     (face, then saliency) full-bleed COVER crop.
+#   - Source aspect ratio far off (extreme portrait/panorama) -> center-fit +
+#     LETTERBOX on letterbox_bg (brand-black bars blend into the background
+#     instead of destroying the photo with an aggressive crop).
+# rembg cutout is a rare, explicit opt-in (set assets.treatment: "cutout"), used only
+# for a clean single subject; if it comes out poor the renderer falls back to cover/letterbox.
+image_treatment:
+  default: "fullbleed"
+  letterbox_bg: "#0A0A0A"        # bars behind an off-ratio image (matches --bg, blends in)
+  cover_tolerance: 0.85          # |src_ratio - zone_ratio(~1.29)| within this -> cover; else letterbox
+  scrim: "linear-gradient(to top, #050505 0%, rgba(5,5,5,0.92) 30%, rgba(5,5,5,0.35) 58%, rgba(5,5,5,0) 78%)"
+
+# Deterministic premium finish applied to every sourced photo (scripts/imagefx.py) -
+# no AI, no tokens. Gentle brand-ward grade + light vignette + a touch of film grain,
+# the editorial texture that separates a "sourced photo" from a "designed post".
+image_finish:
+  tint_hex: "#1A1A2E"
+  grade_strength: 0.10
+  vignette_strength: 0.35
+  grain_amount: 0.02
+
+# Minimal editing components. Accent budget is deliberately tiny (2 violet touches total):
+#   1. **keyword** emphasis inside the headline   2. the thin brand-bar accent line.
+components:
+  highlight_span_color: "#A78BFA"          # inline **keyword** - bold weight + soft violet
+  brand_line_color: "#8B5CF6"              # the single thin accent line above the brand bar
+  brand_line_width: "56px"
