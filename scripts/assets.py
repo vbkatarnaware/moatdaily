@@ -142,9 +142,14 @@ def iter_image_candidates(assets_spec, source_url, source_image_url=None, brave_
     if source_image_url:
         yield source_image_url, "api:image", False
 
-    og_url = get_og_image_url(source_url)
-    if og_url:
-        yield og_url, "og:image", False
+    # news.google.com URLs are redirect wrappers, not the article's real page - their
+    # og:image is Google News's own generic app icon, never the story's actual photo.
+    # Skip straight to entities/Wikipedia/Brave search for these instead.
+    source_host = urllib.parse.urlparse(source_url or "").netloc.lower()
+    if source_host and "news.google.com" not in source_host:
+        og_url = get_og_image_url(source_url)
+        if og_url:
+            yield og_url, "og:image", False
 
     entities = (assets_spec or {}).get("entities", [])
     for entity in entities[:2]:

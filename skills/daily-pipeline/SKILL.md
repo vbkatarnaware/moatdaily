@@ -72,14 +72,16 @@ eval $D python scripts/render_html.py
 auto-selected mechanically (no vision model needed) - `assets.resolve_hero_image`
 picks a real, non-logo photo per post/slide.
 
-### 6. Review (mechanical - no vision needed)
+### 6. Review (mechanical + automated Gemini vision/copy-accuracy check)
 ```bash
 eval $D python scripts/review_post.py
 ```
--> `data/review.json` with `mechanical_status` PASS/FAIL per post. On unattended
-runs, accept the mechanical result: a mechanical PASS is enough to publish
-(`ai_verdict` stays null; publish falls back to `mechanical_status`). The AI
-vision pass is optional and only runs when a vision-capable model is configured.
+-> `data/review.json` with `mechanical_status` PASS/FAIL per post. When
+`review.gemini_api_key` is set in `config/settings.yaml`, this script also calls
+Gemini to judge photo relevance/watermarks and caption factual accuracy, filling
+`ai_verdict`/`ai_notes` automatically - no separate vision step needed. Without a
+key, `ai_verdict` stays null and a mechanical PASS is enough to publish (`publish`
+falls back to `mechanical_status`).
 
 ### 7. Log
 ```bash

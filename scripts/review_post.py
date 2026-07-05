@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """
-MoatDaily - Mechanical Pre-Filter
+MoatDaily - Mechanical Pre-Filter + optional Gemini vision/copy-accuracy check
 
-This script only checks what code CAN reliably check: resolution, corruption,
-copy length/presence/hashtags, the disclaimer, no stray em dashes, and a
-structural safety net (no detected face bleeding into the reserved text panel).
+The mechanical pass only checks what code CAN reliably check: resolution,
+corruption, copy length/presence/hashtags, the disclaimer, no stray em dashes,
+and a structural safety net (no detected face bleeding into the reserved text
+panel). It does NOT judge whether the photo is relevant or whether the caption
+invented facts - those are subjective/semantic and require an actual look.
 
-It does NOT judge whether a post looks good, whether the photo is relevant, or
-whether the crop/composition is premium - those are subjective and belong to
-the `review-post` skill, where a vision-capable agent actually looks at each
-rendered PNG. This script's PASS/FAIL is a pre-filter gate, not the review.
+When `review.gemini_api_key` is set in settings.yaml, this script also calls
+Gemini (vision + text) to judge exactly that, and fills ai_verdict/ai_notes
+automatically. With no key configured, ai_verdict/ai_notes stay null and it's
+the `review-post` skill's job (a human/vision-capable agent) to fill them, or
+publish falls back to mechanical_status alone.
 
 Usage: python scripts/review_post.py
 """
@@ -23,6 +26,98 @@ import yaml
 from PIL import Image
 
 EXPECTED_SIZE = (1080, 1350)  # both static and carousel are 4:5
+
+GEMINI_JSON_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "verdict": {"type": "string", "enum": ["PASS", "FAIL"]},
+        "notes": {"type": "string"},
+    },
+    "required": ["verdict", "notes"],
+}
+
+# Mirrors skills/review-post/SKILL.md's Step 2 checklist verbatim, plus a new
+# copy-accuracy item no mechanical check can catch. Keep the two in sync.
+GEMINI_PROMPT_TEMPLATE = """You are reviewing an Instagram post for a news account before it publishes. Judge the attached rendered image against this checklist and respond with strict JSON only.
+
+Checklist:
+- Relevance: is the photo genuinely about THIS story - the right person, company, place, or event? Not a generic stand-in.
+- Composition: is the subject fully visible and well-placed within the photo zone (top ~62% of the frame)? Not awkwardly cropped or cut off mid-face.
+- No foreign watermark/logo: does the hero photo carry another outlet's logo, masthead, or watermark anywhere in the frame? Hard FAIL if so, regardless of how the image was sourced.
+- Copy accuracy: does the headline/subline/caption below invent any fact, number, date, quote, or name that is NOT present in the source text below? Hard FAIL if so.
+
+Post headline: {headline}
+Post subline: {subline}
+Post caption: {caption}
+
+Source title: {source_title}
+Source description: {source_description}
+Source text: {source_text}
+
+Respond with JSON: {{"verdict": "PASS" or "FAIL", "notes": "one sentence explaining why"}}"""
+
+
+def run_gemini_check(brief, image_path, settings):
+    """Automated stand-in for review-post skill Step 2 (vision + copy-accuracy).
+
+    Returns (verdict, notes) - verdict is "PASS"/"FAIL", or None if unavailable
+    (no api key, SDK missing, or every model in the chain failed). None means
+    "skip", never "FAIL" - so a Gemini outage degrades to today's mechanical-only
+    behavior instead of blocking every post.
+    """
+    review_cfg = (settings or {}).get("review", {}) or {}
+    api_key = (review_cfg.get("gemini_api_key") or "").strip()
+    if not api_key or not image_path or not Path(image_path).exists():
+        return None, None
+
+    try:
+        from google import genai
+    except ImportError:
+        return None, None
+
+    models = [review_cfg.get("gemini_model") or "gemini-3.5-flash"]
+    models += list(review_cfg.get("gemini_fallback_models") or [])
+
+    copy = brief.get("copy", {})
+    prompt = GEMINI_PROMPT_TEMPLATE.format(
+        headline=copy.get("headline", {}).get("text", ""),
+        subline=copy.get("subline", {}).get("text", ""),
+        caption=copy.get("caption", {}).get("text", ""),
+        source_title=brief.get("source_title", ""),
+        source_description=brief.get("source_description", ""),
+        source_text=brief.get("source_text", ""),
+    )
+
+    try:
+        client = genai.Client(api_key=api_key)
+        uploaded = client.files.upload(file=str(image_path))
+    except Exception as e:
+        print(f"[WARN] Gemini file upload failed: {e}")
+        return None, None
+
+    for model in models:
+        try:
+            interaction = client.interactions.create(
+                model=model,
+                input=[
+                    {"type": "text", "text": prompt},
+                    {"type": "image", "uri": uploaded.uri, "mime_type": uploaded.mime_type},
+                ],
+                response_format={
+                    "type": "text",
+                    "mime_type": "application/json",
+                    "schema": GEMINI_JSON_SCHEMA,
+                },
+            )
+            result = json.loads(interaction.output_text)
+            verdict = result.get("verdict")
+            if verdict in ("PASS", "FAIL"):
+                return verdict, result.get("notes")
+        except Exception as e:
+            print(f"[WARN] Gemini check failed on {model}: {e}")
+            continue
+
+    return None, None
 
 
 def load_config():
@@ -156,9 +251,11 @@ def check_brand_compliance(brief):
     return issues
 
 
-def generate_review(brief, image_path, photo_zone_ratio):
-    """Mechanical PASS/FAIL for one post. ai_verdict/ai_notes are left null here -
-    the review-post skill fills them in after actually looking at the PNG."""
+def generate_review(brief, image_path, photo_zone_ratio, settings=None):
+    """Mechanical PASS/FAIL for one post, plus an automated Gemini vision/copy-
+    accuracy check when settings.review.gemini_api_key is configured. Without a
+    key, ai_verdict/ai_notes stay null - the review-post skill (a human/vision
+    agent) fills them in after actually looking at the PNG."""
     image_issues = check_image_quality(image_path) if image_path and Path(image_path).exists() else ["Image file not found"]
     if image_path and Path(image_path).exists():
         image_issues += check_face_in_panel(image_path, photo_zone_ratio)
@@ -166,15 +263,21 @@ def generate_review(brief, image_path, photo_zone_ratio):
     brand_issues = check_brand_compliance(brief)
 
     all_issues = image_issues + copy_issues + brand_issues
+    mechanical_status = "PASS" if not all_issues else "FAIL"
+
+    ai_verdict, ai_notes = None, None
+    if mechanical_status == "PASS":
+        # No point spending an API call on a post already mechanically rejected.
+        ai_verdict, ai_notes = run_gemini_check(brief, image_path, settings)
 
     return {
         "article_id": brief.get("article_id", "unknown"),
         "title": brief.get("source_title", "")[:60],
         "image_path": str(image_path) if image_path else None,
-        "mechanical_status": "PASS" if not all_issues else "FAIL",
+        "mechanical_status": mechanical_status,
         "issues": all_issues,
-        "ai_verdict": None,   # filled by the review-post skill: PASS | FAIL
-        "ai_notes": None,     # filled by the review-post skill: what to fix, if anything
+        "ai_verdict": ai_verdict,   # PASS | FAIL | None (None = no Gemini key / unavailable)
+        "ai_notes": ai_notes,
         "reviewed_at": datetime.now().isoformat(),
     }
 
@@ -212,7 +315,7 @@ def main():
         article_id = brief.get("article_id", "unknown")
         image_path = rendered_map.get(article_id)
 
-        review = generate_review(brief, image_path, photo_zone_ratio)
+        review = generate_review(brief, image_path, photo_zone_ratio, settings)
         reviews.append(review)
 
         if review["mechanical_status"] == "PASS":
@@ -224,12 +327,20 @@ def main():
             for issue in review["issues"]:
                 print(f"     -> {issue}")
 
+        if review["ai_verdict"]:
+            print(f"     Gemini: {review['ai_verdict']} - {review['ai_notes']}")
+
+    ai_pass_count = sum(1 for r in reviews if r["ai_verdict"] == "PASS")
+    ai_fail_count = sum(1 for r in reviews if r["ai_verdict"] == "FAIL")
+
     output = {
         "reviewed_at": datetime.now().isoformat(),
         "summary": {
             "total": len(reviews),
             "mechanical_passed": pass_count,
             "mechanical_failed": fail_count,
+            "ai_passed": ai_pass_count,
+            "ai_failed": ai_fail_count,
             "retry_limit": retry_limit,
         },
         "reviews": reviews,
@@ -240,7 +351,11 @@ def main():
         json.dump(output, f, indent=2, ensure_ascii=False)
 
     print(f"\nMechanical pre-filter done: {pass_count} passed, {fail_count} failed -> {output_path}")
-    print("Next: run the review-post skill to have a vision agent judge each PNG for real.")
+    if ai_pass_count or ai_fail_count:
+        print(f"Gemini check: {ai_pass_count} passed, {ai_fail_count} failed.")
+    else:
+        print("Next: run the review-post skill to have a vision agent judge each PNG for real "
+              "(no review.gemini_api_key configured, so this ran mechanical-only).")
 
 
 if __name__ == "__main__":

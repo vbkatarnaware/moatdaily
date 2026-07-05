@@ -24,14 +24,17 @@ This writes `data/review.json` with one entry per post: `mechanical_status` (PAS
 
 If `mechanical_status` is FAIL, fix the listed issue first (usually a `copy.json` edit) before spending time on the visual check.
 
-## Unattended runs (no vision model - e.g. free-tier text-only)
-Skip Step 2. A `mechanical_status` of PASS is sufficient to publish on unattended
-runs - `publish_instagram.py` falls back to `mechanical_status` when `ai_verdict`
-is null. Leave `ai_verdict`/`ai_notes` null. Only do Step 2 when a vision-capable
-model is actually driving the run.
+## Unattended runs
+When `review.gemini_api_key` is set in `config/settings.yaml`, `review_post.py`
+itself now performs Step 2 automatically (Gemini vision + copy-accuracy call) and
+fills `ai_verdict`/`ai_notes` - skip doing it manually, its output already reflects
+the checklist below. With no Gemini key configured, `ai_verdict`/`ai_notes` stay
+null and a `mechanical_status` of PASS is sufficient to publish - `publish_instagram.py`
+falls back to `mechanical_status` when `ai_verdict` is null. Only do Step 2 by hand
+when neither Gemini nor another vision-capable model is actually driving the run.
 
-## Step 2 - Visual Review (you, actually looking at the image)
-For each post whose `mechanical_status` is PASS, open the actual PNG at its `image_path` and judge it against this checklist:
+## Step 2 - Visual + Copy Review (automated via Gemini, or you if no key is configured)
+For each post whose `mechanical_status` is PASS, judge the rendered PNG at its `image_path` against this checklist:
 
 - **Relevance**: is the photo genuinely about THIS story - the right person, company, place, or event? Not a generic stand-in.
 - **Composition**: is the subject fully visible and well-placed within the photo zone (top ~62% of the frame)? Not awkwardly cropped, not cut off mid-face.
@@ -40,8 +43,9 @@ For each post whose `mechanical_status` is PASS, open the actual PNG at its `ima
 - **Brand consistency**: brand name top-right, accent line + handle at the bottom of the panel, exactly one highlighted keyword in violet in the headline.
 - **No foreign watermark/logo**: does the hero photo itself carry another outlet's logo, masthead, or watermark anywhere in the frame (e.g. a publisher's bubble logo baked into a corner)? This is a hard FAIL regardless of how the image was sourced, including a trusted `image_url` override that skipped mechanical checks - the vision check is the only thing catching this case, so look carefully at every corner of the photo zone.
 - **Carousel-specific**: for `carousel` posts, is each slide's image actually different and relevant to that specific slide's fact (not the same photo repeated across all slides, unless the source genuinely offers only one visual and that was a deliberate choice)?
+- **Copy accuracy**: does the headline/subline/caption invent, mix up, or misstate any fact, number, date, quote, or name relative to `source_title`/`source_description`/`source_text`? (e.g. conflating a fundraise amount with a valuation figure, or the wrong company's photo for a story about a different company in the same corporate group.)
 
-Write your verdict back into that post's entry in `data/review.json`:
+Write the verdict back into that post's entry in `data/review.json`:
 - `"ai_verdict": "PASS"` or `"ai_verdict": "FAIL"`
 - `"ai_notes": "..."` - if FAIL, the specific fix needed (e.g. "photo is a Nithin Kamath quote card, not Nithin Kamath himself - re-pick via select-images")
 

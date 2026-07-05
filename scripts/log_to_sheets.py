@@ -94,6 +94,14 @@ def read_posted_history_from_sheet(settings):
         return None, None
 
 
+POSTS_HEADERS = [
+    "Date", "Article ID", "Headline", "Post Type", "Status",
+    "India Score", "Engagement Score", "Total Score",
+    "Image Path", "Image Source", "Caption Preview", "Source", "URL",
+    "Review Status", "Rendered At", "Posted Status", "Posted At", "Logged At"
+]
+
+
 def get_sheets_client(settings):
     """Initialize Google Sheets client for the main Posts tab."""
     if not GSPREAD_AVAILABLE:
@@ -108,13 +116,15 @@ def get_sheets_client(settings):
             worksheet = sheet.worksheet(worksheet_name)
         except gspread.WorksheetNotFound:
             worksheet = sheet.add_worksheet(title=worksheet_name, rows=1000, cols=18)
-            headers = [
-                "Date", "Article ID", "Headline", "Post Type", "Status",
-                "India Score", "Engagement Score", "Total Score",
-                "Image Path", "Image Source", "Caption Preview", "Source", "URL",
-                "Review Status", "Rendered At", "Posted Status", "Posted At", "Logged At"
-            ]
-            worksheet.append_row(headers)
+            worksheet.append_row(POSTS_HEADERS)
+
+        # Self-repair: an existing sheet's header can predate a schema change (it did -
+        # a live run appended rows against a header missing "Image Source"/"Posted
+        # Status", silently shifting every column). Re-check and fix it every time
+        # rather than only at worksheet creation.
+        last_col_letters = gspread.utils.rowcol_to_a1(1, len(POSTS_HEADERS))[:-1]
+        if worksheet.row_values(1) != POSTS_HEADERS:
+            worksheet.update(range_name=f"A1:{last_col_letters}1", values=[POSTS_HEADERS])
 
         return client, worksheet
     except Exception as e:
@@ -122,36 +132,46 @@ def get_sheets_client(settings):
         return None, None
 
 
-def log_to_sheets(worksheet, post_data):
-    """Append a row to Google Sheets."""
+def _post_data_to_row(post_data):
+    return [
+        post_data.get("date", ""),
+        post_data.get("article_id", ""),
+        post_data.get("headline", "")[:100],
+        post_data.get("post_type", ""),
+        post_data.get("status", ""),
+        post_data.get("india_score", ""),
+        post_data.get("engagement_score", ""),
+        post_data.get("total_score", ""),
+        post_data.get("image_path", ""),
+        post_data.get("image_source", ""),
+        post_data.get("caption_preview", "")[:200],
+        post_data.get("source", ""),
+        post_data.get("url", ""),
+        post_data.get("review_status", ""),
+        post_data.get("rendered_at", ""),
+        post_data.get("posted_status", "not_posted"),
+        post_data.get("posted_at", ""),
+        datetime.now().isoformat(),
+    ]
+
+
+def log_to_sheets(worksheet, post_data_list):
+    """Append all of this run's posts to Google Sheets in a single call.
+
+    A slot's posts used to be appended one row at a time, which let two
+    back-to-back append_row() calls race on "next empty row" and land one row
+    shifted into the wrong columns (observed directly during testing). Batching
+    into one append_rows() call is both the fix and fewer API calls per slot.
+    """
     if not worksheet:
         return False
 
     try:
-        row = [
-            post_data.get("date", ""),
-            post_data.get("article_id", ""),
-            post_data.get("headline", "")[:100],
-            post_data.get("post_type", ""),
-            post_data.get("status", ""),
-            post_data.get("india_score", ""),
-            post_data.get("engagement_score", ""),
-            post_data.get("total_score", ""),
-            post_data.get("image_path", ""),
-            post_data.get("image_source", ""),
-            post_data.get("caption_preview", "")[:200],
-            post_data.get("source", ""),
-            post_data.get("url", ""),
-            post_data.get("review_status", ""),
-            post_data.get("rendered_at", ""),
-            post_data.get("posted_status", "not_posted"),
-            post_data.get("posted_at", ""),
-            datetime.now().isoformat(),
-        ]
-        worksheet.append_row(row, value_input_option="RAW")
+        rows = [_post_data_to_row(post_data) for post_data in post_data_list]
+        worksheet.append_rows(rows, value_input_option="RAW")
         return True
     except Exception as e:
-        print(f"[ERROR] Failed to append row: {e}")
+        print(f"[ERROR] Failed to append rows: {e}")
         return False
 
 
@@ -296,16 +316,6 @@ def main():
             "posted_at": "",
         }
 
-        # Log to Google Sheets
-        if worksheet:
-            success = log_to_sheets(worksheet, post_data)
-            if success:
-                print(f"  📊 Sheets: {post_data['headline'][:50]}...")
-            else:
-                print(f"  ⚠️  Sheets failed, saved locally: {post_data['headline'][:50]}...")
-        else:
-            print(f"  💾 Local only: {post_data['headline'][:50]}...")
-
         log_entries.append(post_data)
         if post_data["status"] == "ready":
             winners.append({
@@ -314,6 +324,18 @@ def main():
                 "headline": post_data["headline"],
                 "date": today,
             })
+
+    # Log all of this run's posts to Google Sheets in one batched call.
+    if worksheet:
+        success = log_to_sheets(worksheet, log_entries)
+        for post_data in log_entries:
+            if success:
+                print(f"  📊 Sheets: {post_data['headline'][:50]}...")
+            else:
+                print(f"  ⚠️  Sheets failed, saved locally: {post_data['headline'][:50]}...")
+    else:
+        for post_data in log_entries:
+            print(f"  💾 Local only: {post_data['headline'][:50]}...")
 
     update_posted_history(data_dir, winners, settings)
 

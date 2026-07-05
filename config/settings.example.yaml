@@ -39,6 +39,12 @@ posting:
     - carousel
   retry_limit: 3
 
+review:
+  gemini_api_key: ""                    # optional - Google AI Studio key, free tier. Blank = skip, falls back to mechanical_status only.
+  gemini_model: "gemini-3.5-flash"       # primary - current flagship, free tier, vision-capable
+  gemini_fallback_models:
+    - "gemini-2.5-flash"                 # stable fallback if the primary is unavailable/rate-limited
+
 output:
   posts_dir: "output/posts"
   data_dir: "data"

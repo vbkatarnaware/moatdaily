@@ -9,6 +9,10 @@ oauth2client>=4.1.3
 requests>=2.31.0
 pyyaml>=6.0
 
+# Gemini API - optional automated vision + copy-accuracy check in review_post.py.
+# Degrades gracefully (mechanical_status only) if no review.gemini_api_key is set.
+google-genai>=2.0.0
+
 # Optional - stealth article fetching (og:image + body text past 403/hotlink
 # blocks) in scripts/fetchers.py. Everything degrades to a plain urllib GET
 # if this isn't installed, so it's not a hard requirement for unattended runs.
