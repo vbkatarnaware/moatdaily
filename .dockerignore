@@ -1,0 +1,19 @@
+# Keep the build context lean and, above all, secret-free. Anything holding
+# real credentials is mounted at runtime instead of baked into the image, so a
+# leaked/pushed image layer never carries secrets.
+.venv/
+data/
+output/
+__pycache__/
+**/__pycache__/
+*.pyc
+.git/
+.DS_Store
+
+# Secrets - injected at `docker run` via read-only mounts, never in the image
+config/settings.yaml
+credentials/
+
+# Dev-only docs, not needed at runtime
+.planning/
+.claude/

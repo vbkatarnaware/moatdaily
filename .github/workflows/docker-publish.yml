@@ -1,0 +1,56 @@
+# Build the MoatDaily pipeline image and push it to GHCR on every push to main.
+#
+# Builds linux/amd64 (the EC2 target arch; local dev on Apple Silicon is arm64,
+# so the registry image is the canonical one for the server).
+#
+# Auto-deploy to EC2 (docker pull on the box) is intentionally NOT wired up yet:
+# the full image is ~2-3.7GB and the EC2 root volume is currently too full to
+# hold it. Once the disk is expanded, add a deploy job that SSHes in with a
+# restricted deploy key and runs `docker pull`. Publishing today does not need
+# the image on EC2 - it renders locally/in-CI and serves via Caddy.
+name: Build and publish image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/**"
+      - "templates/**"
+      - "requirements.txt"
+      - "Dockerfile"
+      - ".dockerignore"
+      - "config/settings.example.yaml"
+      - "config/brand.yaml"
+      - "config/news_sources.yaml"
+      - ".github/workflows/docker-publish.yml"
+  workflow_dispatch: {}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/vbkatarnaware/moatdaily:latest
+            ghcr.io/vbkatarnaware/moatdaily:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

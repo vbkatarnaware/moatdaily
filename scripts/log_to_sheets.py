@@ -36,7 +36,13 @@ def get_sheets_client(settings):
     if not GSPREAD_AVAILABLE:
         return None, None
 
-    creds_path = settings["sheets"]["credentials_path"]
+    # Resolve a relative credentials_path against the repo root, so one
+    # settings.yaml works unchanged on any host (Mac, EC2, inside Docker where
+    # the repo root is /app). Absolute paths are left as-is for back-compat.
+    creds_path = Path(settings["sheets"]["credentials_path"])
+    if not creds_path.is_absolute():
+        creds_path = Path(__file__).parent.parent / creds_path
+    creds_path = str(creds_path)
     scope = [
         "https://spreadsheets.google.com/feeds",
         "https://www.googleapis.com/auth/drive",

@@ -15,13 +15,21 @@ news:
 
 sheets:
   spreadsheet_id: ""
-  credentials_path: "/path/to/your/gcp-service-account.json"
+  credentials_path: "credentials/gcp-service-account.json"  # relative to repo root (portable across hosts) or an absolute path
   worksheet_name: "Posts"
 
 instagram:
   access_token: ""           # long-lived token, leave blank to keep publishing inert
   ig_user_id: ""              # Instagram Business/Creator account id
-  public_base_url: ""        # public URL mirroring output/posts/ (Graph API fetches media by URL, not raw bytes)
+  app_id: ""                  # Meta app id - for scripts/refresh_ig_token.py (mint a long-lived token)
+  app_secret: ""              # Meta app secret - same; keep secret
+  public_base_url: ""        # public URL serving the rendered posts (Graph API fetches media by URL, not raw bytes)
+  # Optional: how rendered images reach the host serving public_base_url at
+  # publish time. Omit entirely if the machine running publish already writes
+  # into the served directory. ssh_target "" means "this same host" (local copy).
+  host_upload:
+    ssh_target: ""            # ssh alias/host that serves public_base_url ("" = same host)
+    remote_dir: ""            # directory on that host mapped to public_base_url, e.g. /srv/moatdaily-posts
 
 posting:
   daily_post_count: 4  # 3-6 range, start with 4
