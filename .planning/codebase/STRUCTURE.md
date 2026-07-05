@@ -16,7 +16,7 @@ moatdaily/
   - `config/brand.yaml`: Colors, typography sizes, layout dimensions.
   - `config/news_sources.yaml`: RSS endpoints and keyword scoring weights.
 - **Business Logic (Scripts)**:
-  - `scripts/fetch_news.py`, `scripts/filter_news.py`, `scripts/write_copy.py`, `scripts/render_post.py`, `scripts/review_post.py`, `scripts/log_to_sheets.py`.
+  - `scripts/fetch_news.py`, `scripts/filter_news.py`, `scripts/write_copy.py`, `scripts/render_html.py`, `scripts/review_post.py`, `scripts/log_to_sheets.py`.
 - **Agent Interfaces**:
   - `skills/daily-pipeline/SKILL.md`: The master workflow definition.
   - `skills/<task>/SKILL.md`: Atomic instructions for agents to execute a specific script.

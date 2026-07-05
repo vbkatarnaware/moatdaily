@@ -17,7 +17,7 @@
 - **Logo.dev / Hunter.io Logos**
   - **Purpose**: Fetching company logos dynamically by domain name.
   - **Auth**: None (Public endpoints).
-  - **Usage**: Used in `scripts/render_post.py` as a fallback for the deprecated Clearbit API (`https://logos.hunter.io/:domain`).
+  - **Usage**: Used in `scripts/render_html.py` as a fallback for the deprecated Clearbit API (`https://logos.hunter.io/:domain`).
 
 - **RSS Feeds**
   - **Purpose**: Secondary/fallback news ingestion from predefined Indian and Global tech/business publications.

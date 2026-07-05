@@ -15,6 +15,14 @@ Every post needs ONE real photo that is 100% relevant to its headline, sits well
 - Before `render-post`
 - Fifth-ish step, but it can run for either `static` or `carousel` briefs
 
+## Unattended runs (no vision/search model - e.g. free-tier text-only)
+If you can't browse or see images, **skip this step entirely** - do not guess a
+URL. Leave `assets.image_url` blank and let `render_html.py` auto-select: its
+`assets.resolve_hero_image` heuristic searches by `entities`/`primary_query` and
+picks a real, non-logo photo mechanically. Slightly lower quality than a vision
+pick but reliable and zero tokens. Only do Path A/B when you actually have
+vision + web search.
+
 ## Path A - Direct (preferred, use this whenever you can browse/search the web)
 Do what a person would do: search the web/images for the story (use the headline, `assets.entities`, or `assets.primary_query` as your query), open a few results, and pick the photo that is **actually about this story** - the right person, the right company, the right event. Then:
 

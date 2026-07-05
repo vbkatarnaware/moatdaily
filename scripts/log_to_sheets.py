@@ -31,8 +31,12 @@ def load_config():
     return settings, root
 
 
-def get_sheets_client(settings):
-    """Initialize Google Sheets client."""
+POSTED_HISTORY_TAB = "PostedHistory"
+POSTED_HISTORY_HEADERS = ["Article ID", "Title Key", "Headline", "Date"]
+
+
+def _open_sheet(settings):
+    """Authorize and open the spreadsheet. Returns (client, sheet) or (None, None)."""
     if not GSPREAD_AVAILABLE:
         return None, None
 
@@ -47,19 +51,63 @@ def get_sheets_client(settings):
         "https://spreadsheets.google.com/feeds",
         "https://www.googleapis.com/auth/drive",
     ]
-
     try:
         creds = ServiceAccountCredentials.from_json_keyfile_name(creds_path, scope)
         client = gspread.authorize(creds)
         sheet = client.open_by_key(settings["sheets"]["spreadsheet_id"])
-        worksheet_name = settings["sheets"].get("worksheet_name", "Posts")
+        return client, sheet
+    except Exception as e:
+        print(f"[ERROR] Google Sheets connection failed: {e}")
+        return None, None
 
-        # Get or create worksheet
+
+def get_posted_history_worksheet(settings):
+    """Get (or create) the PostedHistory tab used for cross-environment dedup.
+    Returns the worksheet or None if Sheets is unavailable."""
+    _, sheet = _open_sheet(settings)
+    if not sheet:
+        return None
+    try:
+        return sheet.worksheet(POSTED_HISTORY_TAB)
+    except gspread.WorksheetNotFound:
+        ws = sheet.add_worksheet(title=POSTED_HISTORY_TAB, rows=2000, cols=4)
+        ws.append_row(POSTED_HISTORY_HEADERS)
+        return ws
+    except Exception as e:
+        print(f"[WARN] PostedHistory tab unavailable: {e}")
+        return None
+
+
+def read_posted_history_from_sheet(settings):
+    """Return (ids_set, title_keys_set) from the PostedHistory tab, or
+    (None, None) if Sheets is unavailable - caller then relies on local JSON."""
+    ws = get_posted_history_worksheet(settings)
+    if not ws:
+        return None, None
+    try:
+        rows = ws.get_all_values()[1:]  # skip header
+        ids = {r[0] for r in rows if r and r[0]}
+        title_keys = {r[1] for r in rows if len(r) > 1 and r[1]}
+        return ids, title_keys
+    except Exception as e:
+        print(f"[WARN] Could not read PostedHistory tab: {e}")
+        return None, None
+
+
+def get_sheets_client(settings):
+    """Initialize Google Sheets client for the main Posts tab."""
+    if not GSPREAD_AVAILABLE:
+        return None, None
+
+    client, sheet = _open_sheet(settings)
+    if not sheet:
+        return None, None
+    try:
+        worksheet_name = settings["sheets"].get("worksheet_name", "Posts")
         try:
             worksheet = sheet.worksheet(worksheet_name)
         except gspread.WorksheetNotFound:
             worksheet = sheet.add_worksheet(title=worksheet_name, rows=1000, cols=18)
-            # Add headers
             headers = [
                 "Date", "Article ID", "Headline", "Post Type", "Status",
                 "India Score", "Engagement Score", "Total Score",
@@ -132,12 +180,13 @@ def mark_posted_in_sheet(worksheet, article_id, posted_at):
         return False
 
 
-def update_posted_history(data_dir, winners):
+def update_posted_history(data_dir, winners, settings=None):
     """
     Append this run's successfully-reviewed posts (article id + hashed URL,
     and a normalized title_key since Google News links are per-crawl proxy
-    URLs) to data/posted_history.json, so filter_news.py won't re-select the
-    same story on a later day.
+    URLs) to data/posted_history.json (fast, offline-safe) AND, when settings
+    is given, to the Sheet's PostedHistory tab - so dedup works across every
+    host that shares the Sheet (Mac, EC2), not just one machine's local file.
     """
     history_path = data_dir / "posted_history.json"
     history = {"entries": []}
@@ -146,14 +195,31 @@ def update_posted_history(data_dir, winners):
             history = json.load(f)
 
     seen_ids = {e["id"] for e in history["entries"]}
+    new_entries = []
     for w in winners:
         if w["id"] in seen_ids:
             continue
         history["entries"].append(w)
+        new_entries.append(w)
         seen_ids.add(w["id"])
 
     with open(history_path, "w") as f:
         json.dump(history, f, indent=2, ensure_ascii=False)
+
+    # Mirror new entries to the Sheet for cross-environment dedup (best-effort).
+    if settings and new_entries and GSPREAD_AVAILABLE:
+        ws = get_posted_history_worksheet(settings)
+        if ws:
+            try:
+                existing = set(ws.col_values(1))  # column 1 = Article ID (+ header)
+                rows = [
+                    [w["id"], w.get("title_key", ""), w.get("headline", "")[:100], w.get("date", "")]
+                    for w in new_entries if w["id"] not in existing
+                ]
+                if rows:
+                    ws.append_rows(rows)
+            except Exception as e:
+                print(f"[WARN] Could not append to PostedHistory tab: {e}")
 
 
 def main():
@@ -249,7 +315,7 @@ def main():
                 "date": today,
             })
 
-    update_posted_history(data_dir, winners)
+    update_posted_history(data_dir, winners, settings)
 
     # Save local backup
     local_log = {

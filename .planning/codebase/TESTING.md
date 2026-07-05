@@ -12,7 +12,7 @@
   - Run `scripts/filter_news.py`
   - Run `scripts/write_copy.py`
   - Run `scripts/fill_copy_test.py`
-  - Run `scripts/render_post.py`
+  - Run `scripts/render_html.py`
   - Run `scripts/review_post.py`
   - Run `scripts/log_to_sheets.py`
   - Visual inspection of the output in `output/posts/` and the Google Sheet.

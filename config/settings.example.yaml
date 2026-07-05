@@ -17,6 +17,7 @@ sheets:
   spreadsheet_id: ""
   credentials_path: "credentials/gcp-service-account.json"  # relative to repo root (portable across hosts) or an absolute path
   worksheet_name: "Posts"
+  use_for_dedup: false     # true = also read the Sheet's PostedHistory tab when filtering, so posts are deduped across every host sharing the Sheet (set true on the server)
 
 instagram:
   access_token: ""           # long-lived token, leave blank to keep publishing inert

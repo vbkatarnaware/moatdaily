@@ -24,6 +24,12 @@ This writes `data/review.json` with one entry per post: `mechanical_status` (PAS
 
 If `mechanical_status` is FAIL, fix the listed issue first (usually a `copy.json` edit) before spending time on the visual check.
 
+## Unattended runs (no vision model - e.g. free-tier text-only)
+Skip Step 2. A `mechanical_status` of PASS is sufficient to publish on unattended
+runs - `publish_instagram.py` falls back to `mechanical_status` when `ai_verdict`
+is null. Leave `ai_verdict`/`ai_notes` null. Only do Step 2 when a vision-capable
+model is actually driving the run.
+
 ## Step 2 - Visual Review (you, actually looking at the image)
 For each post whose `mechanical_status` is PASS, open the actual PNG at its `image_path` and judge it against this checklist:
 

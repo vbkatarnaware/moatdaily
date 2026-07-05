@@ -78,16 +78,31 @@ def load_config():
     return settings, sources, root
 
 
-def load_posted_history(data_dir):
-    """Returns (id_set, title_key_set) of stories already posted on prior days,
-    so the same story isn't re-selected on consecutive runs."""
+def load_posted_history(data_dir, settings=None):
+    """Returns (id_set, title_key_set) of stories already posted, so the same
+    story isn't re-selected. Reads the local JSON AND (when settings is given)
+    the Sheet's PostedHistory tab, unioning them - so a story posted from any
+    host that shares the Sheet is skipped everywhere. Falls back to local-only
+    if Sheets is unreachable."""
+    ids, title_keys = set(), set()
+
     history_path = data_dir / "posted_history.json"
-    if not history_path.exists():
-        return set(), set()
-    with open(history_path) as f:
-        history = json.load(f)
-    ids = {e["id"] for e in history.get("entries", [])}
-    title_keys = {e["title_key"] for e in history.get("entries", [])}
+    if history_path.exists():
+        with open(history_path) as f:
+            history = json.load(f)
+        ids |= {e["id"] for e in history.get("entries", [])}
+        title_keys |= {e["title_key"] for e in history.get("entries", [])}
+
+    if settings is not None:
+        try:
+            import log_to_sheets
+            sheet_ids, sheet_keys = log_to_sheets.read_posted_history_from_sheet(settings)
+            if sheet_ids is not None:
+                ids |= sheet_ids
+                title_keys |= sheet_keys
+        except Exception:
+            pass  # any Sheets issue -> local-only, never block filtering
+
     return ids, title_keys
 
 
@@ -219,11 +234,20 @@ def filter_and_rank(articles, signals, count):
 
 
 def suggest_post_type(article):
-    """Suggest static vs carousel based on content."""
-    desc_len = len(article.get("description", ""))
-    title_len = len(article.get("title", ""))
+    """Default to static; reserve carousel for genuinely multi-fact stories
+    (roundups, explainers, explicit numbered lists) so the daily mix stays
+    mostly static with the occasional carousel."""
+    text = f"{article.get('title', '')} {article.get('description', '')}".lower()
 
-    if desc_len > 300 or "how" in article["title"].lower() or "why" in article["title"].lower():
+    # Strong multi-fact signals only - keep carousel occasional, not the default.
+    carousel_phrases = ["roundup", "round-up", "explainer", "explained",
+                        "key takeaways", "everything you need to know",
+                        "in charts", "by the numbers"]
+    numbered_list = re.search(
+        r"\b\d+\s+(things|ways|reasons|lessons|takeaways|charts|startups|"
+        r"companies|trends|deals|updates)\b", text)
+
+    if numbered_list or any(p in text for p in carousel_phrases):
         return "carousel"
     return "static"
 
@@ -247,7 +271,12 @@ def main():
     articles = raw["articles"]
     signals = sources["relevance_signals"]
 
-    posted_ids, posted_title_keys = load_posted_history(data_dir)
+    # Union the Sheet's PostedHistory tab into dedup only when enabled, so
+    # slots on any host skip what another host already posted. Off by default
+    # to keep local/offline runs fast and Google-free.
+    use_sheet = settings.get("sheets", {}).get("use_for_dedup", False)
+    posted_ids, posted_title_keys = load_posted_history(
+        data_dir, settings if use_sheet else None)
     before = len(articles)
     articles = [a for a in articles if not already_posted(a, posted_ids, posted_title_keys)]
     skipped = before - len(articles)

@@ -1,7 +1,7 @@
 # Concerns & Technical Debt
 
 ## Network Dependencies & Fragility
-- **Image Downloading (`render_post.py`)**: The script attempts to download images directly from the URLs provided in the RSS feeds. Many news sites block automated scraping (403 Forbidden) or have hotlink protection, resulting in failed downloads. The fallback is a gradient background, but this reduces visual quality.
+- **Image Downloading (`render_html.py`)**: The script attempts to download images directly from the URLs provided in the RSS feeds. Many news sites block automated scraping (403 Forbidden) or have hotlink protection, resulting in failed downloads. The fallback is a gradient background, but this reduces visual quality.
 - **Logo Fetching**: The pipeline relies on `logo.clearbit.com` (which is deprecated/shut down) and `logos.hunter.io`. These are undocumented or unsupported APIs. If they change, logo overlay will fail silently.
 
 ## AI Reliability

@@ -10,7 +10,7 @@
 - `filter_news.py` reads `data/raw_news.json` and writes `data/filtered_news.json`
 - `write_copy.py` reads `data/filtered_news.json` and writes `data/copy.json`
 - The AI Agent fills the blanks in `data/copy.json`.
-- `render_post.py` reads `data/copy.json` and writes PNGs + `data/render_manifest.json`
+- `render_html.py` reads `data/copy.json` and writes PNGs + `data/render_manifest.json`
 - `review_post.py` reads `data/copy.json` + `data/render_manifest.json` and writes `data/review.json`
 - `log_to_sheets.py` reads everything and writes to Google Sheets.
 

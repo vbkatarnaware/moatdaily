@@ -1,86 +1,107 @@
 ---
 name: daily-pipeline
-description: Master skill - runs the complete MoatDaily pipeline end-to-end. Fetches news, filters, writes copy, picks images, renders posts, reviews quality, and logs to Google Sheets. Use this for daily automated runs.
-version: 2.0.0
+description: Runs ONE MoatDaily posting slot end-to-end - fetch, filter, write copy, render, review, publish 2 fresh posts. Triggered 3x/day by Hermes cron. Use this for automated runs.
+version: 3.0.0
 author: moatdaily
 ---
 
-# MoatDaily - Daily Pipeline (Master Skill)
+# MoatDaily - Daily Pipeline (per-slot, server/Docker)
 
 ## Objective
-Run the complete content pipeline: fetch -> filter -> write -> select images -> render -> review -> log (-> publish, once Instagram credentials exist).
-Produces 3-6 ready-to-publish Instagram posts about startup/business/AI/tech news for Indian audiences.
+Publish **2 fresh Instagram posts** for one time slot. Runs 3x/day (10 AM, 3 PM,
+9 PM IST) as independent slots - each slot fetches fresh news and posts 2, so a
+failure in one slot never affects the others. Already-posted stories are skipped
+automatically (posted_history + Sheets dedup), so slots self-coordinate with no
+shared "daily plan".
 
 ## When to Use
-- Daily content generation (manually or via an orchestrator like Hermes)
-- When someone says "generate today's posts" or "run moatdaily"
+- The Hermes cron job fires (3x/day). Each fire = one slot = 2 posts.
+- Or manually: "run a MoatDaily slot".
 
-## Prerequisites
-- Python 3.11+ with dependencies: `pip install -r requirements.txt`
-- News source keys configured in `config/settings.yaml` (Currents API is optional; Google News RSS + publisher RSS need no key)
-- Google Sheets credentials at the configured path (optional - logging degrades to local-only without it)
-- Fonts in `templates/fonts/` (Inter Black, Inter Regular, Inter Bold)
+## Runtime: Docker on EC2
+All mechanical stages run in the prebuilt image. Define the run prefix once:
 
-## Full Pipeline
-
-### Step 1: Fetch News
 ```bash
-cd "/Users/vipulkatarnaware/Documents/AI Agents/moatdaily"
-source .venv/bin/activate
-python scripts/fetch_news.py
+D='docker run --rm \
+  -v /home/ubuntu/moatdaily/config/settings.yaml:/app/config/settings.yaml:ro \
+  -v /home/ubuntu/moatdaily/credentials:/app/credentials:ro \
+  -v /home/ubuntu/moatdaily/data:/app/data \
+  -v /home/ubuntu/moatdaily/output:/app/output \
+  -v /srv/moatdaily-posts:/srv/moatdaily-posts \
+  ghcr.io/vbkatarnaware/moatdaily:latest'
 ```
-Expected: `data/raw_news.json` with articles across all four verticals (startup, business, tech, AI).
+Notes: `data/` and `output/` are read-write (the pipeline reads/writes JSON +
+PNGs). `/srv/moatdaily-posts` is where publish copies the image for Caddy to
+serve. `settings.yaml`/`credentials` are read-only. On the server,
+`instagram.host_upload.ssh_target` is `""` so publish copies locally into /srv.
 
-### Step 2: Filter & Score
+## The slot (run in order)
+
+### 1. Fetch
 ```bash
-python scripts/filter_news.py --count 4
+eval $D python scripts/fetch_news.py
 ```
-Expected: `data/filtered_news.json` with the top stories.
-**AI Action**: Review selections, swap if any story is weak for the Indian audience.
+-> `data/raw_news.json`.
 
-### Step 3: Generate Copy Briefs
+### 2. Filter (only 2 for this slot)
 ```bash
-python scripts/write_copy.py
+eval $D python scripts/filter_news.py --count 2
 ```
-Expected: `data/copy.json` with empty text fields.
-**AI Action**: Fill every `copy.*.text` field (headline/subline/caption/carousel_slides), grounded in `source_title`/`source_description`/`source_text` - reframing is fine, inventing facts is not. See the `write-copy` skill for the full rules.
+-> `data/filtered_news.json` with the top 2 UNPOSTED stories (dedup drops
+anything already posted today/earlier). Mostly `static`, occasional `carousel`.
 
-### Step 4: Select Images
-See the `select-images` skill. Preferred: search the web directly and write the chosen photo's URL into `assets.image_url`. Fallback (no browsing available): run `python scripts/gather_images.py`, then pick from `data/image_candidates.json`.
-
-### Step 5: Render Posts
+### 3. Scaffold copy briefs
 ```bash
-python scripts/render_html.py
+eval $D python scripts/write_copy.py
 ```
-Expected: PNG files in `output/posts/YYYY-MM-DD/` - reserved-panel layout (photo zone + solid text panel), 4:5 for both static and carousel.
+-> `data/copy.json` with empty `copy.*.text` fields + `source_title` /
+`source_description` / `source_text` for grounding.
 
-### Step 6: Review Quality
+### 4. Write the copy  (the ONLY LLM step - you do this)
+Edit `/home/ubuntu/moatdaily/data/copy.json`: fill every `copy.*.text` field
+(kicker/headline/subline/caption, and `carousel_slides` for carousels), grounded
+in the `source_*` fields. Reframing/condensing/opinion is fine; inventing facts,
+numbers, dates, quotes, or names is NOT. No em dash characters anywhere. See the
+`write-copy` skill for the full rules. The free text model is enough for this.
+
+### 5. Render
 ```bash
-python scripts/review_post.py
+eval $D python scripts/render_html.py
 ```
-Expected: `data/review.json` with a mechanical PASS/FAIL per post.
-**AI Action**: For every mechanical PASS, actually look at the rendered PNG and judge relevance, readability, and premium feel - write `ai_verdict`/`ai_notes` back into `data/review.json`. See the `review-post` skill. If FAIL -> fix and re-render (max 3 retries).
+-> PNGs in `output/posts/YYYY-MM-DD/` + `data/render_manifest.json`. Images are
+auto-selected mechanically (no vision model needed) - `assets.resolve_hero_image`
+picks a real, non-logo photo per post/slide.
 
-### Step 7: Log Results
+### 6. Review (mechanical - no vision needed)
 ```bash
-python scripts/log_to_sheets.py
+eval $D python scripts/review_post.py
 ```
-Expected: Rows appended to the Google Sheet + `data/log.json` backup.
+-> `data/review.json` with `mechanical_status` PASS/FAIL per post. On unattended
+runs, accept the mechanical result: a mechanical PASS is enough to publish
+(`ai_verdict` stays null; publish falls back to `mechanical_status`). The AI
+vision pass is optional and only runs when a vision-capable model is configured.
 
-### Step 8: Publish (once Instagram credentials are configured)
-See the `publish-post` skill. Inert (logs "publish skipped") until `instagram.access_token` / `instagram.ig_user_id` are set in `config/settings.yaml`.
-
-## Output
-After the pipeline completes:
-- 3-6 Instagram-ready PNG posts in `output/posts/YYYY-MM-DD/`
-- Matching captions in `data/copy.json`
-- Full log in Google Sheets
-- Published to Instagram automatically once credentials are configured; otherwise ready for manual upload
-
-## Scheduling (for Cron/Orchestrators like Hermes)
-This pipeline has no built-in scheduler - it's designed to be run manually or triggered by whatever orchestrator sits on top (Hermes, cron, etc.):
+### 7. Log
+```bash
+eval $D python scripts/log_to_sheets.py
 ```
-Cron: 30 1 * * *
-Task: Run the daily-pipeline skill
+-> appends to the Google Sheet (+ `data/log.json`) and updates
+`data/posted_history.json` / the Sheet `PostedHistory` tab for dedup.
+
+### 8. Publish
+```bash
+eval $D python scripts/publish_instagram.py --limit 2
 ```
-This is a 1:30 AM UTC = 7:00 AM IST run.
+Publishes the review-PASSed posts (max 2), copies each image into
+`/srv/moatdaily-posts/` for Caddy, and the Graph API fetches it by URL. The token
+self-refreshes here if near expiry.
+
+## Failure handling
+If any stage exits nonzero, stop and report - don't force later stages. The next
+slot is independent and will run clean. Within a slot, stages checkpoint via
+`data/*.json`, so a re-run resumes rather than restarts.
+
+## Scheduling (Hermes cron)
+One job, fires 3x/day: `30 4,9,15 * * *` UTC = 10 AM / 3 PM / 9 PM IST. Each fire
+runs this skill once (2 posts). Registered via `hermes cron`, not by editing
+jobs.json.
