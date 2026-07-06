@@ -44,6 +44,9 @@ review:
   gemini_model: "gemini-3.5-flash"       # primary - current flagship, free tier, vision-capable
   gemini_fallback_models:
     - "gemini-2.5-flash"                 # stable fallback if the primary is unavailable/rate-limited
+  openrouter_api_key: ""                # optional last-resort fallback, ONLY used when the direct Gemini free tier returns 429/quota-exhausted - paid via OpenRouter credits
+  openrouter_models:
+    - "google/gemini-3.5-flash"          # Gemini-only by design; non-google/gemini slugs are ignored with a warning
 
 output:
   posts_dir: "output/posts"

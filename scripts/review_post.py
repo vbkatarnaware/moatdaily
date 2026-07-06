@@ -91,37 +91,55 @@ def _strip_json_fence(text):
     return text.strip()
 
 
-def run_gemini_check(brief, image_path, settings):
-    """Automated stand-in for review-post skill Step 2 (vision + copy-accuracy).
+def _is_quota_error(e):
+    """True only for a genuine Gemini free-tier quota/rate exhaustion (observed directly
+    as a 429 RateLimitError with body {"code": "too_many_requests", ...}) - the one and
+    only condition allowed to escalate to the paid OpenRouter fallback. Any other failure
+    (network blip, bad response shape, missing SDK) must NOT escalate - it degrades to
+    mechanical-only, same as before OpenRouter existed."""
+    if getattr(e, "status_code", None) == 429:
+        return True
+    msg = str(e).lower()
+    return "too_many_requests" in msg or "quota" in msg or " 429" in msg or "429 " in msg
 
-    Returns (verdict, notes) - verdict is "PASS"/"FAIL", or None if unavailable
-    (no api key, SDK missing, or every model in the chain failed). None means
-    "skip", never "FAIL" - so a Gemini outage degrades to today's mechanical-only
-    behavior instead of blocking every post.
-    """
-    review_cfg = (settings or {}).get("review", {}) or {}
+
+def _judge(call_once, model, trust_single):
+    """Shared verdict logic for one model. trust_single=True (the direct primary only):
+    one call is trusted directly - observed directly that temperature=0 + a fixed seed
+    makes its verdict reproducible call-to-call. trust_single=False (every other model -
+    direct fallbacks and all OpenRouter models): fail-closed 2-call consensus, since a
+    fallback-grade model's verdict was observed NOT to be reproducible even at the same
+    temperature=0/seed config (PASS/FAIL/PASS across 3 identical calls on the same image).
+    A PASS needs both calls to agree; any FAIL or disagreement fails closed to FAIL rather
+    than risk a wrong-image publish on a coin-flip verdict. Exceptions from call_once
+    propagate so the caller can distinguish quota errors from other failures."""
+    verdict, notes = call_once(model)
+    if trust_single:
+        return verdict, notes
+
+    verdict2, notes2 = call_once(model)
+    if verdict == "PASS" and verdict2 == "PASS":
+        return "PASS", notes
+    return "FAIL", (notes if verdict == "FAIL" else notes2) or \
+        "Fallback model verdict inconsistent across repeated checks - failing closed."
+
+
+def _run_gemini_direct(prompt, image_path, review_cfg):
+    """The direct google-genai SDK path (free tier). Returns (verdict, notes, quota_hit) -
+    quota_hit is True only when an attempt failed specifically due to free-tier quota
+    exhaustion, which is the sole trigger for escalating to the paid OpenRouter fallback."""
     api_key = (review_cfg.get("gemini_api_key") or "").strip()
-    if not api_key or not image_path or not Path(image_path).exists():
-        return None, None
+    if not api_key:
+        return None, None, False
 
     try:
         from google import genai
         from google.genai import types
     except ImportError:
-        return None, None
+        return None, None, False
 
     models = [review_cfg.get("gemini_model") or "gemini-3.5-flash"]
     models += list(review_cfg.get("gemini_fallback_models") or [])
-
-    copy = brief.get("copy", {})
-    prompt = GEMINI_PROMPT_TEMPLATE.format(
-        headline=copy.get("headline", {}).get("text", ""),
-        subline=copy.get("subline", {}).get("text", ""),
-        caption=copy.get("caption", {}).get("text", ""),
-        source_title=brief.get("source_title", ""),
-        source_description=brief.get("source_description", ""),
-        source_text=brief.get("source_text", ""),
-    )
 
     try:
         # Explicit timeout: a hung network call here (observed directly - an SDK
@@ -132,7 +150,7 @@ def run_gemini_check(brief, image_path, settings):
         uploaded = client.files.upload(file=str(image_path))
     except Exception as e:
         print(f"[WARN] Gemini file upload failed: {e}")
-        return None, None
+        return None, None, _is_quota_error(e)
 
     def call_once(model):
         interaction = client.interactions.create(
@@ -154,35 +172,133 @@ def run_gemini_check(brief, image_path, settings):
             raise ValueError(f"unexpected verdict field: {result!r}")
         return verdict, result.get("notes")
 
+    quota_hit = False
     for i, model in enumerate(models):
-        is_primary = i == 0
         try:
-            verdict, notes = call_once(model)
+            verdict, notes = _judge(call_once, model, trust_single=(i == 0))
+            return verdict, notes, False
         except Exception as e:
             print(f"[WARN] Gemini check failed on {model}: {e}")
+            quota_hit = quota_hit or _is_quota_error(e)
             continue
 
-        if is_primary:
-            # Observed directly: temperature=0 + a fixed seed makes the primary
-            # model's verdict reproducible call-to-call, so one call is trustworthy.
+    return None, None, quota_hit
+
+
+def _openrouter_call_once(model, prompt, data_uri, api_key):
+    import requests
+
+    resp = requests.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}"},
+        json={
+            "model": model,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": data_uri}},
+                ],
+            }],
+            "temperature": 0,
+            "response_format": {"type": "json_object"},
+            # Without an explicit cap, OpenRouter defaults to the model's max (65536 for
+            # gemini-3.5-flash) and 402s if the account's credit balance can't cover the
+            # theoretical max - observed directly. The actual response is a one-line JSON
+            # verdict/notes; 2000 leaves generous headroom over that plus any thinking
+            # tokens while staying well inside a small credit balance.
+            "max_tokens": 2000,
+        },
+        timeout=GEMINI_TIMEOUT_MS / 1000,
+    )
+    resp.raise_for_status()
+    content = resp.json()["choices"][0]["message"]["content"]
+    result = json.loads(_strip_json_fence(content))
+    verdict = result.get("verdict")
+    if verdict not in ("PASS", "FAIL"):
+        raise ValueError(f"unexpected verdict field: {result!r}")
+    return verdict, result.get("notes")
+
+
+def _run_openrouter(prompt, image_path, review_cfg):
+    """Last-resort fallback - ONLY reached from run_gemini_check when the direct Gemini
+    free tier is quota-exhausted. Paid via the user's own OpenRouter credits, so
+    deliberately restricted to Gemini models only (google/gemini* slugs); anything else
+    configured is skipped with a warning rather than silently used."""
+    api_key = (review_cfg.get("openrouter_api_key") or "").strip()
+    if not api_key:
+        return None, None
+
+    configured = list(review_cfg.get("openrouter_models") or [])
+    models = [m for m in configured if m.startswith("google/gemini")]
+    for m in configured:
+        if m not in models:
+            print(f"[WARN] Ignoring non-Gemini OpenRouter model {m!r} - OpenRouter fallback is Gemini-only")
+    if not models:
+        return None, None
+
+    try:
+        import base64
+        with open(image_path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("ascii")
+        mime = "image/png" if str(image_path).lower().endswith(".png") else "image/jpeg"
+        data_uri = f"data:{mime};base64,{b64}"
+    except Exception as e:
+        print(f"[WARN] OpenRouter image encode failed: {e}")
+        return None, None
+
+    for model in models:
+        try:
+            # trust_single=False: a different backend from the direct primary, so treat
+            # it as fallback-grade (2-call consensus) rather than trusting one call.
+            return _judge(
+                lambda m: _openrouter_call_once(m, prompt, data_uri, api_key),
+                model,
+                trust_single=False,
+            )
+        except Exception as e:
+            print(f"[WARN] OpenRouter Gemini check failed on {model}: {e}")
+            continue
+
+    return None, None
+
+
+def run_gemini_check(brief, image_path, settings):
+    """Automated stand-in for review-post skill Step 2 (vision + copy-accuracy).
+
+    Returns (verdict, notes) - verdict is "PASS"/"FAIL", or None if unavailable.
+    Tries the direct Gemini free tier first (review.gemini_api_key). Only when that
+    fails specifically due to quota exhaustion (never for any other reason) does it
+    escalate to a paid OpenRouter Gemini fallback (review.openrouter_api_key) - a
+    last resort so the identity/copy-accuracy check keeps running on a heavy day
+    instead of silently degrading to mechanical-only. No key(s) configured, or every
+    attempt unavailable for a non-quota reason, returns (None, None) - "skip", never
+    "FAIL" - so an outage degrades to mechanical-only behavior, not a block on every post.
+    """
+    if not image_path or not Path(image_path).exists():
+        return None, None
+
+    review_cfg = (settings or {}).get("review", {}) or {}
+    copy = brief.get("copy", {})
+    prompt = GEMINI_PROMPT_TEMPLATE.format(
+        headline=copy.get("headline", {}).get("text", ""),
+        subline=copy.get("subline", {}).get("text", ""),
+        caption=copy.get("caption", {}).get("text", ""),
+        source_title=brief.get("source_title", ""),
+        source_description=brief.get("source_description", ""),
+        source_text=brief.get("source_text", ""),
+    )
+
+    verdict, notes, quota_hit = _run_gemini_direct(prompt, image_path, review_cfg)
+    if verdict is not None:
+        return verdict, notes
+
+    if quota_hit:
+        verdict, notes = _run_openrouter(prompt, image_path, review_cfg)
+        if verdict is not None:
             return verdict, notes
 
-        # Fallback models only run when the primary is unavailable (quota/outage) -
-        # exactly when we can least afford a wrong verdict. Observed directly that
-        # a fallback model's verdict is NOT reproducible even with the same
-        # temperature=0/seed config (PASS/FAIL/PASS across 3 identical calls on
-        # the same image). So require a second call to agree before trusting a
-        # PASS; any FAIL or disagreement is fail-closed to FAIL rather than risking
-        # a wrong-image publish on a coin-flip verdict.
-        try:
-            verdict2, notes2 = call_once(model)
-        except Exception as e:
-            print(f"[WARN] Gemini consensus re-check failed on {model}: {e}")
-            continue
-
-        if verdict == "PASS" and verdict2 == "PASS":
-            return "PASS", notes
-        return "FAIL", (notes if verdict == "FAIL" else notes2) or "Fallback model verdict inconsistent across repeated checks - failing closed."
+    return None, None
 
     return None, None
 
