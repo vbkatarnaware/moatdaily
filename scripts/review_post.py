@@ -47,10 +47,15 @@ GEMINI_JSON_SCHEMA = {
 GEMINI_PROMPT_TEMPLATE = """You are reviewing an Instagram post for a news account before it publishes. Judge the attached rendered image against this checklist and respond with strict JSON only.
 
 Checklist:
+- Identity: if the headline/subline/caption names a specific person, is the person in the photo VERIFIABLY that person? Judge this ONLY from your own independent knowledge of what that named person looks like - do NOT treat the headline/kicker/caption text rendered into the image itself as evidence, since that text was written by an automated pipeline and may be attached to the wrong photo. If you do not have confident independent knowledge of this specific person's face, or cannot verify the match, treat it as a FAIL - do not guess or give the benefit of the doubt.
 - Relevance: is the photo genuinely about THIS story - the right person, company, place, or event? Not a generic stand-in.
 - Composition: is the subject fully visible and well-placed within the photo zone (top ~62% of the frame)? Not awkwardly cropped or cut off mid-face.
 - No foreign watermark/logo: does the hero photo carry another outlet's logo, masthead, or watermark anywhere in the frame? Hard FAIL if so, regardless of how the image was sourced.
 - Copy accuracy: does the headline/subline/caption below invent any fact, number, date, quote, or name that is NOT present in the source text below? Hard FAIL if so.
+
+When uncertain on any item, FAIL. A wrongly rejected post is simply replaced by the next
+candidate; a wrongly approved post publishes a real mistake. Bias every judgment call toward
+FAIL, not PASS.
 
 Post headline: {headline}
 Post subline: {subline}
@@ -61,6 +66,29 @@ Source description: {source_description}
 Source text: {source_text}
 
 Respond with JSON: {{"verdict": "PASS" or "FAIL", "notes": "one sentence explaining why"}}"""
+
+GEMINI_GENERATION_CONFIG = {
+    # Deterministic judging: the exact same image+prompt must yield the exact
+    # same verdict every time (observed directly - the same wrong-person photo
+    # FAILed once and PASSed on a later, otherwise-identical call at default
+    # sampling). temperature=0 + a fixed seed removes that randomness.
+    "temperature": 0.0,
+    "top_p": 1.0,
+    "seed": 7,
+}
+
+
+def _strip_json_fence(text):
+    """gemini-2.5-flash (unlike the primary model) sometimes wraps its JSON
+    response in a markdown code fence even when response_format requests raw
+    JSON - observed directly: identical verdict/notes content, just wrapped in
+    ```json ... ```. Strip that wrapper before parsing."""
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+        if text.rstrip().endswith("```"):
+            text = text.rstrip()[:-3]
+    return text.strip()
 
 
 def run_gemini_check(brief, image_path, settings):
@@ -106,27 +134,55 @@ def run_gemini_check(brief, image_path, settings):
         print(f"[WARN] Gemini file upload failed: {e}")
         return None, None
 
-    for model in models:
+    def call_once(model):
+        interaction = client.interactions.create(
+            model=model,
+            input=[
+                {"type": "text", "text": prompt},
+                {"type": "image", "uri": uploaded.uri, "mime_type": uploaded.mime_type},
+            ],
+            response_format={
+                "type": "text",
+                "mime_type": "application/json",
+                "schema": GEMINI_JSON_SCHEMA,
+            },
+            generation_config=GEMINI_GENERATION_CONFIG,
+        )
+        result = json.loads(_strip_json_fence(interaction.output_text))
+        verdict = result.get("verdict")
+        if verdict not in ("PASS", "FAIL"):
+            raise ValueError(f"unexpected verdict field: {result!r}")
+        return verdict, result.get("notes")
+
+    for i, model in enumerate(models):
+        is_primary = i == 0
         try:
-            interaction = client.interactions.create(
-                model=model,
-                input=[
-                    {"type": "text", "text": prompt},
-                    {"type": "image", "uri": uploaded.uri, "mime_type": uploaded.mime_type},
-                ],
-                response_format={
-                    "type": "text",
-                    "mime_type": "application/json",
-                    "schema": GEMINI_JSON_SCHEMA,
-                },
-            )
-            result = json.loads(interaction.output_text)
-            verdict = result.get("verdict")
-            if verdict in ("PASS", "FAIL"):
-                return verdict, result.get("notes")
+            verdict, notes = call_once(model)
         except Exception as e:
             print(f"[WARN] Gemini check failed on {model}: {e}")
             continue
+
+        if is_primary:
+            # Observed directly: temperature=0 + a fixed seed makes the primary
+            # model's verdict reproducible call-to-call, so one call is trustworthy.
+            return verdict, notes
+
+        # Fallback models only run when the primary is unavailable (quota/outage) -
+        # exactly when we can least afford a wrong verdict. Observed directly that
+        # a fallback model's verdict is NOT reproducible even with the same
+        # temperature=0/seed config (PASS/FAIL/PASS across 3 identical calls on
+        # the same image). So require a second call to agree before trusting a
+        # PASS; any FAIL or disagreement is fail-closed to FAIL rather than risking
+        # a wrong-image publish on a coin-flip verdict.
+        try:
+            verdict2, notes2 = call_once(model)
+        except Exception as e:
+            print(f"[WARN] Gemini consensus re-check failed on {model}: {e}")
+            continue
+
+        if verdict == "PASS" and verdict2 == "PASS":
+            return "PASS", notes
+        return "FAIL", (notes if verdict == "FAIL" else notes2) or "Fallback model verdict inconsistent across repeated checks - failing closed."
 
     return None, None
 

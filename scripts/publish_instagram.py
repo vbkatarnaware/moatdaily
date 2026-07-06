@@ -321,6 +321,21 @@ def main():
             posted_at = datetime.now().isoformat()
             print(f"  ✅ Published {article_id} -> media {media_id}")
             record_published(data_dir, article_id, media_id, posted_at)
+            # log_to_sheets.py records dedup "winners" based on the review
+            # verdict *before* publish runs - a story review_post/log rejected
+            # can still end up actually published (e.g. a live Gemini re-check
+            # here disagreeing with what was stored, or any other discrepancy),
+            # which left a real gap in production: a published post that never
+            # made it into posted_history.json, so it resurfaced as a "fresh"
+            # pick in a later slot. Publish success is the ground truth for
+            # what's actually live, so record dedup history here too.
+            winner = {
+                "id": article_id,
+                "title_key": sanitize.title_key(brief.get("source_title", "")),
+                "headline": brief.get("copy", {}).get("headline", {}).get("text", ""),
+                "date": datetime.now().strftime("%Y-%m-%d"),
+            }
+            log_to_sheets.update_posted_history(data_dir, [winner], None if args.no_sheet else settings)
             if worksheet:
                 log_to_sheets.mark_posted_in_sheet(worksheet, article_id, posted_at)
             published += 1

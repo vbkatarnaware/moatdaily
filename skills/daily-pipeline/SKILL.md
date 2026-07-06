@@ -1,6 +1,6 @@
 ---
 name: daily-pipeline
-description: Runs ONE MoatDaily posting slot end-to-end - fetch, filter, write copy, render, review, publish 2 fresh posts. Triggered 3x/day by Hermes cron. Use this for automated runs.
+description: Runs ONE MoatDaily posting slot end-to-end - fetch, filter a pool of 4, write copy, render, review, publish the best 2 that pass. Triggered 3x/day by Hermes cron. Use this for automated runs.
 version: 3.0.0
 author: moatdaily
 ---
@@ -8,12 +8,15 @@ author: moatdaily
 # MoatDaily - Daily Pipeline (per-slot, server/Docker)
 
 ## Objective
-Publish **up to 2 fresh Instagram posts** for one time slot. Runs 3x/day (10 AM,
-3 PM, 9 PM IST) as independent slots - each slot fetches fresh news and posts up
-to 2, so a failure in one slot never affects the others. Already-posted stories
-are skipped automatically (posted_history + Sheets dedup), so slots
-self-coordinate with no shared "daily plan". **Publishing fewer than 2, including
-zero, is a normal and correct outcome** - see Rules below.
+Publish **up to 2 fresh Instagram posts** for one time slot, drawn from a pool of
+**4** candidates - so if one or two candidates get rejected (bad image, failed
+copy-accuracy check), the next-best candidate backfills instead of shrinking the
+slot. Runs 3x/day (10 AM, 3 PM, 9 PM IST) as independent slots - each slot
+fetches fresh news and posts up to 2, so a failure in one slot never affects the
+others. Already-posted stories are skipped automatically (posted_history +
+Sheets dedup), so slots self-coordinate with no shared "daily plan".
+**Publishing fewer than 2, including zero, is a normal and correct outcome when
+enough of the 4 candidates are rejected** - see Rules below.
 
 ## Rules (do not violate)
 - Run each script below **exactly once, in order**. Never re-run a step that
@@ -58,12 +61,16 @@ eval $D python scripts/fetch_news.py
 ```
 -> `data/raw_news.json`.
 
-### 2. Filter (only 2 for this slot)
+### 2. Filter (pool of 4 for this slot)
 ```bash
-eval $D python scripts/filter_news.py --count 2
+eval $D python scripts/filter_news.py --count 4
 ```
--> `data/filtered_news.json` with the top 2 UNPOSTED stories (dedup drops
+-> `data/filtered_news.json` with the top 4 UNPOSTED stories (dedup drops
 anything already posted today/earlier). Mostly `static`, occasional `carousel`.
+Deliberately larger than the 2 that will actually publish - `publish_instagram.py`
+(step 8) publishes the best 2 that pass every gate, backfilling from this pool
+when a candidate is rejected. Write copy for **all 4** in step 4; do not trim the
+pool down to 2 yourself.
 
 ### 3. Scaffold copy briefs
 ```bash
@@ -112,9 +119,12 @@ eval $D python scripts/publish_instagram.py --limit 2
 This is the final, authoritative gate - it independently re-checks each post
 (not already published this slot, a real image was found, mechanical PASS, and
 a live Gemini re-check) before publishing, regardless of what `review.json`
-says. Publishes at most 2 posts, copies each image into `/srv/moatdaily-posts/`
-for Caddy, and the Graph API fetches it by URL. The token self-refreshes here if
-near expiry. **Call this exactly once per slot.**
+says. It walks the pool of up to 4 candidates in ranked order, skips any that
+fail a gate, and publishes the first 2 that pass - this is what makes the
+pool-of-4 backfill work, with zero extra flags needed. Copies each published
+image into `/srv/moatdaily-posts/` for Caddy, and the Graph API fetches it by
+URL. The token self-refreshes here if near expiry. **Call this exactly once per
+slot.**
 
 ## Failure handling
 If any stage exits nonzero, stop and report - don't force later stages. The next
