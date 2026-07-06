@@ -27,7 +27,9 @@ from PIL import Image
 
 EXPECTED_SIZE = (1080, 1350)  # both static and carousel are 4:5
 
-GEMINI_TIMEOUT_MS = 30_000  # per-request HTTP timeout, so a network stall degrades to "unavailable"
+GEMINI_TIMEOUT_MS = 60_000  # per-request HTTP timeout, so a network stall degrades to "unavailable"
+                            # (60s, not 30s: a plain text call was observed taking 22s under normal
+                            # but slow API latency - the larger image+schema call needs headroom)
 
 GEMINI_JSON_SCHEMA = {
     "type": "object",
