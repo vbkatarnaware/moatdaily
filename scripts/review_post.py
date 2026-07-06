@@ -224,18 +224,21 @@ def _openrouter_call_once(model, prompt, data_uri, api_key):
 
 def _run_openrouter(prompt, image_path, review_cfg):
     """Last-resort fallback - ONLY reached from run_gemini_check when the direct Gemini
-    free tier is quota-exhausted. Paid via the user's own OpenRouter credits, so
-    deliberately restricted to Gemini models only (google/gemini* slugs); anything else
-    configured is skipped with a warning rather than silently used."""
+    free tier is quota-exhausted. Deliberately restricted to Google models only
+    (google/* slugs); anything else configured is skipped with a warning rather than
+    silently used. openrouter_models is tried in list order, so put the free Gemma
+    model first (google/gemma-4-31b-it:free - genuinely $0, no credit risk) and the
+    paid Gemini model last (google/gemini-3.5-flash - draws down OpenRouter credits,
+    only reached if the free model also fails)."""
     api_key = (review_cfg.get("openrouter_api_key") or "").strip()
     if not api_key:
         return None, None
 
     configured = list(review_cfg.get("openrouter_models") or [])
-    models = [m for m in configured if m.startswith("google/gemini")]
+    models = [m for m in configured if m.startswith("google/")]
     for m in configured:
         if m not in models:
-            print(f"[WARN] Ignoring non-Gemini OpenRouter model {m!r} - OpenRouter fallback is Gemini-only")
+            print(f"[WARN] Ignoring non-Google OpenRouter model {m!r} - OpenRouter fallback is Google-only")
     if not models:
         return None, None
 
@@ -259,7 +262,7 @@ def _run_openrouter(prompt, image_path, review_cfg):
                 trust_single=False,
             )
         except Exception as e:
-            print(f"[WARN] OpenRouter Gemini check failed on {model}: {e}")
+            print(f"[WARN] OpenRouter check failed on {model}: {e}")
             continue
 
     return None, None
