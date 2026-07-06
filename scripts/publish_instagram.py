@@ -292,16 +292,20 @@ def main():
         # Re-run the vision/copy-accuracy check ourselves rather than trusting
         # review.json's stored ai_verdict, which can be (and was, in production)
         # edited after the fact. A live FAIL always blocks; a live PASS always
-        # clears. Only when Gemini is genuinely unavailable (no key, SDK error,
-        # network) do we fall back to the stored verdict, and even then only a
-        # stored FAIL blocks - anything else (including a tampered null) does not
-        # override the mechanical PASS already confirmed above.
+        # clears. An AI verdict is now mandatory to publish: if Gemini is
+        # unavailable on every path (direct free tier AND the OpenRouter
+        # fallback), we skip rather than fall back to mechanical-only - a
+        # mechanical PASS alone cannot catch a wrong-identity photo or an
+        # invented fact, which is exactly the class of incident this check
+        # exists to prevent. Publishing fewer posts (even zero) is preferable
+        # to publishing on an unverified image/caption.
         live_verdict, live_notes = review_post.run_gemini_check(brief, render.get("output_path"), settings)
         if live_verdict == "FAIL":
             print(f"  ⏭️  Skipping {article_id} (Gemini: FAIL - {live_notes})")
             continue
-        if live_verdict is None and review.get("ai_verdict") == "FAIL":
-            print(f"  ⏭️  Skipping {article_id} (stored review ai_verdict: FAIL - {review.get('ai_notes')})")
+        if live_verdict is None:
+            print(f"  ⏭️  Skipping {article_id} (no AI verdict available - Gemini unavailable on every "
+                  f"path; mechanical PASS alone is not enough to publish)")
             continue
 
         if args.limit is not None and published >= args.limit:

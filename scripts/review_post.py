@@ -10,9 +10,11 @@ invented facts - those are subjective/semantic and require an actual look.
 
 When `review.gemini_api_key` is set in settings.yaml, this script also calls
 Gemini (vision + text) to judge exactly that, and fills ai_verdict/ai_notes
-automatically. With no key configured, ai_verdict/ai_notes stay null and it's
-the `review-post` skill's job (a human/vision-capable agent) to fill them, or
-publish falls back to mechanical_status alone.
+automatically (escalating to review.openrouter_api_key as a last resort if the
+free tier is quota-exhausted - see run_gemini_check). A live AI verdict is
+mandatory to publish: publish_instagram.py re-runs this check itself and skips
+a post rather than publish on mechanical_status alone if no verdict is
+available on any path.
 
 Usage: python scripts/review_post.py
 """
@@ -449,9 +451,10 @@ def check_has_real_image(render):
 
 def generate_review(brief, render, photo_zone_ratio, settings=None):
     """Mechanical PASS/FAIL for one post, plus an automated Gemini vision/copy-
-    accuracy check when settings.review.gemini_api_key is configured. Without a
-    key, ai_verdict/ai_notes stay null - the review-post skill (a human/vision
-    agent) fills them in after actually looking at the PNG."""
+    accuracy check via run_gemini_check when settings.review.gemini_api_key is
+    configured. ai_verdict/ai_notes stay null if no verdict is available on any
+    path (see run_gemini_check) - publish_instagram.py treats that as
+    unpublishable rather than falling back to mechanical_status alone."""
     image_path = (render or {}).get("output_path")
     image_issues = check_image_quality(image_path) if image_path and Path(image_path).exists() else ["Image file not found"]
     if image_path and Path(image_path).exists():

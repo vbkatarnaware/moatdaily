@@ -101,9 +101,11 @@ eval $D python scripts/review_post.py
 -> `data/review.json` with `mechanical_status` PASS/FAIL per post. When
 `review.gemini_api_key` is set in `config/settings.yaml`, this script also calls
 Gemini to judge photo relevance/watermarks and caption factual accuracy, filling
-`ai_verdict`/`ai_notes` automatically - no separate vision step needed. Without a
-key, `ai_verdict` stays null and a mechanical PASS is enough to publish (`publish`
-falls back to `mechanical_status`).
+`ai_verdict`/`ai_notes` automatically - no separate vision step needed. A live AI
+verdict is mandatory to publish (step 8 re-checks it itself): if Gemini is
+unavailable on every path (direct free tier and the `review.openrouter_api_key`
+last-resort fallback), the post is skipped even on a mechanical PASS - a
+mechanical check alone cannot catch a wrong-identity photo or an invented fact.
 
 ### 7. Log
 ```bash
