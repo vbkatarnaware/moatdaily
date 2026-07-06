@@ -126,6 +126,14 @@ def get_sheets_client(settings):
         if worksheet.row_values(1) != POSTS_HEADERS:
             worksheet.update(range_name=f"A1:{last_col_letters}1", values=[POSTS_HEADERS])
 
+        # Self-repair: a sheet widened beyond the real schema (e.g. by a partial
+        # manual edit leaving stray cells past column R) confuses append_rows'
+        # table-extent detection into placing new rows dozens of columns to the
+        # right (observed directly in production). Shrink back to the real width -
+        # nothing legitimate ever lives past the last header column.
+        if worksheet.col_count > len(POSTS_HEADERS):
+            worksheet.resize(cols=len(POSTS_HEADERS))
+
         return client, worksheet
     except Exception as e:
         print(f"[ERROR] Google Sheets connection failed: {e}")
@@ -158,17 +166,26 @@ def _post_data_to_row(post_data):
 def log_to_sheets(worksheet, post_data_list):
     """Append all of this run's posts to Google Sheets in a single call.
 
-    A slot's posts used to be appended one row at a time, which let two
-    back-to-back append_row() calls race on "next empty row" and land one row
-    shifted into the wrong columns (observed directly during testing). Batching
-    into one append_rows() call is both the fix and fewer API calls per slot.
+    Writes to an explicit next-empty-row range (A{n}:R{n+k}) rather than
+    append_rows()'s table-auto-detection, which drifts whenever stray cells
+    exist past the real schema width (observed directly in production - it
+    placed rows dozens of columns to the right). Column A ("Date") is always
+    populated for every real row, so len(col_values(1)) + 1 reliably finds the
+    next empty row regardless of what's happened elsewhere in the sheet.
     """
     if not worksheet:
         return False
 
     try:
         rows = [_post_data_to_row(post_data) for post_data in post_data_list]
-        worksheet.append_rows(rows, value_input_option="RAW")
+        next_row = len(worksheet.col_values(1)) + 1
+        last_row = next_row + len(rows) - 1
+        last_col_letters = gspread.utils.rowcol_to_a1(1, len(POSTS_HEADERS))[:-1]
+        worksheet.update(
+            range_name=f"A{next_row}:{last_col_letters}{last_row}",
+            values=rows,
+            value_input_option="RAW",
+        )
         return True
     except Exception as e:
         print(f"[ERROR] Failed to append rows: {e}")
