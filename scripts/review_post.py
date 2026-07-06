@@ -27,6 +27,8 @@ from PIL import Image
 
 EXPECTED_SIZE = (1080, 1350)  # both static and carousel are 4:5
 
+GEMINI_TIMEOUT_MS = 30_000  # per-request HTTP timeout, so a network stall degrades to "unavailable"
+
 GEMINI_JSON_SCHEMA = {
     "type": "object",
     "properties": {
@@ -72,6 +74,7 @@ def run_gemini_check(brief, image_path, settings):
 
     try:
         from google import genai
+        from google.genai import types
     except ImportError:
         return None, None
 
@@ -89,7 +92,11 @@ def run_gemini_check(brief, image_path, settings):
     )
 
     try:
-        client = genai.Client(api_key=api_key)
+        # Explicit timeout: a hung network call here (observed directly - an SDK
+        # call with no timeout blocked for 6+ minutes on a transient network blip)
+        # would otherwise stall review_post.py and, since publish_instagram.py
+        # also calls this function, the publish stage too.
+        client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_MS))
         uploaded = client.files.upload(file=str(image_path))
     except Exception as e:
         print(f"[WARN] Gemini file upload failed: {e}")
@@ -251,14 +258,29 @@ def check_brand_compliance(brief):
     return issues
 
 
-def generate_review(brief, image_path, photo_zone_ratio, settings=None):
+def check_has_real_image(render):
+    """A falsy image_source means resolve_hero_image found nothing usable and
+    the renderer fell back to the brand gradient - not a real photo. Carousels
+    carry a list (one source per slide); every slide needs a real image."""
+    if not render:
+        return ["No render record found"]
+    source = render.get("image_source")
+    ok = all(source) if isinstance(source, list) else bool(source)
+    if not ok:
+        return ["No real image found (gradient fallback) - not publishable"]
+    return []
+
+
+def generate_review(brief, render, photo_zone_ratio, settings=None):
     """Mechanical PASS/FAIL for one post, plus an automated Gemini vision/copy-
     accuracy check when settings.review.gemini_api_key is configured. Without a
     key, ai_verdict/ai_notes stay null - the review-post skill (a human/vision
     agent) fills them in after actually looking at the PNG."""
+    image_path = (render or {}).get("output_path")
     image_issues = check_image_quality(image_path) if image_path and Path(image_path).exists() else ["Image file not found"]
     if image_path and Path(image_path).exists():
         image_issues += check_face_in_panel(image_path, photo_zone_ratio)
+    image_issues += check_has_real_image(render)
     copy_issues = check_copy_quality(brief)
     brand_issues = check_brand_compliance(brief)
 
@@ -303,7 +325,7 @@ def main():
         with open(manifest_path) as f:
             manifest = json.load(f)
         for r in manifest.get("rendered", []):
-            rendered_map[r["article_id"]] = r["output_path"]
+            rendered_map[r["article_id"]] = r
 
     print(f"Mechanical pre-filter: {len(copy_data['briefs'])} posts (max {retry_limit} retries)...")
 
@@ -313,9 +335,9 @@ def main():
 
     for brief in copy_data["briefs"]:
         article_id = brief.get("article_id", "unknown")
-        image_path = rendered_map.get(article_id)
+        render = rendered_map.get(article_id)
 
-        review = generate_review(brief, image_path, photo_zone_ratio, settings)
+        review = generate_review(brief, render, photo_zone_ratio, settings)
         reviews.append(review)
 
         if review["mechanical_status"] == "PASS":

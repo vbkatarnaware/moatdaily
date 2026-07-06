@@ -33,6 +33,7 @@ import yaml
 
 import log_to_sheets
 import refresh_ig_token
+import review_post
 import sanitize
 
 GRAPH_API_VERSION = "v21.0"
@@ -51,6 +52,38 @@ def load_config():
 def is_configured(settings):
     ig = settings.get("instagram", {})
     return bool(ig.get("access_token") and ig.get("ig_user_id") and ig.get("public_base_url"))
+
+
+def load_published_ledger(data_dir):
+    """{article_id: {media_id, published_at}} of everything already posted to
+    Instagram. Guards against publishing the same article twice if this script
+    (or an orchestrating agent) is invoked more than once against the same
+    copy.json/review.json state - observed directly in production when a cron
+    agent re-ran this script after editing review.json."""
+    path = data_dir / "published_media.json"
+    if not path.exists():
+        return {}
+    with open(path) as f:
+        return json.load(f)
+
+
+def record_published(data_dir, article_id, media_id, posted_at):
+    path = data_dir / "published_media.json"
+    ledger = load_published_ledger(data_dir)
+    ledger[article_id] = {"media_id": media_id, "published_at": posted_at}
+    with open(path, "w") as f:
+        json.dump(ledger, f, indent=2, ensure_ascii=False)
+
+
+def has_real_image(render):
+    """A falsy image_source means resolve_hero_image found nothing usable and
+    the renderer fell back to the brand gradient - not a real photo, so not
+    publishable. Carousels carry a list (one source per slide); every slide
+    needs a real image."""
+    source = render.get("image_source")
+    if isinstance(source, list):
+        return bool(source) and all(source)
+    return bool(source)
 
 
 def _rel_to_posts(output_path, settings, root):
@@ -225,6 +258,8 @@ def main():
     if not args.dry_run and not args.no_sheet:
         _, worksheet = log_to_sheets.get_sheets_client(settings)
 
+    ledger = load_published_ledger(data_dir)
+
     only = set(args.only or [])
     published = 0
     for brief in copy_data["briefs"]:
@@ -235,15 +270,38 @@ def main():
         if args.post_type and brief.get("post_type") != args.post_type:
             continue
 
-        review = review_map.get(article_id, {})
-        verdict = review.get("ai_verdict") or review.get("mechanical_status")
-        if verdict != "PASS":
-            print(f"  ⏭️  Skipping {article_id} (review status: {verdict})")
+        if article_id in ledger:
+            print(f"  ⏭️  Skipping {article_id} (already published this slot -> "
+                  f"media {ledger[article_id]['media_id']})")
             continue
 
         render = rendered_map.get(article_id)
         if not render:
             print(f"  ⏭️  Skipping {article_id} (not rendered)")
+            continue
+
+        if not has_real_image(render):
+            print(f"  ⏭️  Skipping {article_id} (no real image found - gradient fallback, not publishable)")
+            continue
+
+        review = review_map.get(article_id, {})
+        if review.get("mechanical_status") != "PASS":
+            print(f"  ⏭️  Skipping {article_id} (mechanical status: {review.get('mechanical_status')})")
+            continue
+
+        # Re-run the vision/copy-accuracy check ourselves rather than trusting
+        # review.json's stored ai_verdict, which can be (and was, in production)
+        # edited after the fact. A live FAIL always blocks; a live PASS always
+        # clears. Only when Gemini is genuinely unavailable (no key, SDK error,
+        # network) do we fall back to the stored verdict, and even then only a
+        # stored FAIL blocks - anything else (including a tampered null) does not
+        # override the mechanical PASS already confirmed above.
+        live_verdict, live_notes = review_post.run_gemini_check(brief, render.get("output_path"), settings)
+        if live_verdict == "FAIL":
+            print(f"  ⏭️  Skipping {article_id} (Gemini: FAIL - {live_notes})")
+            continue
+        if live_verdict is None and review.get("ai_verdict") == "FAIL":
+            print(f"  ⏭️  Skipping {article_id} (stored review ai_verdict: FAIL - {review.get('ai_notes')})")
             continue
 
         if args.limit is not None and published >= args.limit:
@@ -262,6 +320,7 @@ def main():
             media_id = publish_post(brief, render, settings, root)
             posted_at = datetime.now().isoformat()
             print(f"  ✅ Published {article_id} -> media {media_id}")
+            record_published(data_dir, article_id, media_id, posted_at)
             if worksheet:
                 log_to_sheets.mark_posted_in_sheet(worksheet, article_id, posted_at)
             published += 1

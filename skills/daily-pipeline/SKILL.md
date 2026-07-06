@@ -8,14 +8,29 @@ author: moatdaily
 # MoatDaily - Daily Pipeline (per-slot, server/Docker)
 
 ## Objective
-Publish **2 fresh Instagram posts** for one time slot. Runs 3x/day (10 AM, 3 PM,
-9 PM IST) as independent slots - each slot fetches fresh news and posts 2, so a
-failure in one slot never affects the others. Already-posted stories are skipped
-automatically (posted_history + Sheets dedup), so slots self-coordinate with no
-shared "daily plan".
+Publish **up to 2 fresh Instagram posts** for one time slot. Runs 3x/day (10 AM,
+3 PM, 9 PM IST) as independent slots - each slot fetches fresh news and posts up
+to 2, so a failure in one slot never affects the others. Already-posted stories
+are skipped automatically (posted_history + Sheets dedup), so slots
+self-coordinate with no shared "daily plan". **Publishing fewer than 2, including
+zero, is a normal and correct outcome** - see Rules below.
+
+## Rules (do not violate)
+- Run each script below **exactly once, in order**. Never re-run a step that
+  already completed - especially `publish_instagram.py`: running it twice will
+  attempt to republish (it has its own idempotency ledger, but there is no
+  reason to ever call it a second time in one slot).
+- **Never edit `data/review.json`, `data/render_manifest.json`, or any other
+  script output file.** `publish_instagram.py` independently re-verifies image
+  presence, mechanical status, and a live Gemini check itself before publishing
+  each post - it is authoritative and cannot be "fixed" by editing files.
+- If `review_post.py` or `publish_instagram.py` rejects a post (wrong/missing
+  image, failed copy-accuracy check), **accept that outcome**. Do not re-render,
+  do not retry, do not patch data files to force it through. Just report what
+  actually published.
 
 ## When to Use
-- The Hermes cron job fires (3x/day). Each fire = one slot = 2 posts.
+- The Hermes cron job fires (3x/day). Each fire = one slot = up to 2 posts.
 - Or manually: "run a MoatDaily slot".
 
 ## Runtime: Docker on EC2
@@ -94,14 +109,18 @@ eval $D python scripts/log_to_sheets.py
 ```bash
 eval $D python scripts/publish_instagram.py --limit 2
 ```
-Publishes the review-PASSed posts (max 2), copies each image into
-`/srv/moatdaily-posts/` for Caddy, and the Graph API fetches it by URL. The token
-self-refreshes here if near expiry.
+This is the final, authoritative gate - it independently re-checks each post
+(not already published this slot, a real image was found, mechanical PASS, and
+a live Gemini re-check) before publishing, regardless of what `review.json`
+says. Publishes at most 2 posts, copies each image into `/srv/moatdaily-posts/`
+for Caddy, and the Graph API fetches it by URL. The token self-refreshes here if
+near expiry. **Call this exactly once per slot.**
 
 ## Failure handling
 If any stage exits nonzero, stop and report - don't force later stages. The next
-slot is independent and will run clean. Within a slot, stages checkpoint via
-`data/*.json`, so a re-run resumes rather than restarts.
+slot is independent and will run clean. Within a slot, stages 1-7 checkpoint via
+`data/*.json`, so a re-run resumes rather than restarts - but do not re-run
+`publish_instagram.py` (step 8) as a "fix"; see Rules above.
 
 ## Scheduling (Hermes cron)
 One job, fires 3x/day: `30 4,9,15 * * *` UTC = 10 AM / 3 PM / 9 PM IST. Each fire
