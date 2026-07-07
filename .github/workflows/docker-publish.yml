@@ -4,10 +4,13 @@
 # so the registry image is the canonical one for the server).
 #
 # Auto-deploy to EC2 (docker pull on the box) is intentionally NOT wired up yet:
-# the full image is ~2-3.7GB and the EC2 root volume is currently too full to
-# hold it. Once the disk is expanded, add a deploy job that SSHes in with a
-# restricted deploy key and runs `docker pull`. Publishing today does not need
-# the image on EC2 - it renders locally/in-CI and serves via Caddy.
+# deploys today are a manual `ssh` + `docker pull` + `docker image prune -f`
+# (see README.md "Deploy"), with a cron-scheduled prune (scripts/docker_prune.sh)
+# and disk-space tripwire (scripts/check_disk_space.sh) as a safety net against
+# stale image buildup - added after a full day of missed posting slots on
+# 2026-07-07 when 9 stale untagged images filled the disk and crashed the cron
+# scheduler. Once there's appetite for it, add a deploy job here that SSHes in
+# with a restricted deploy key and runs `docker pull`.
 name: Build and publish image
 
 on:

@@ -67,6 +67,26 @@ Each step has a `SKILL.md` in `skills/` - any agent that reads SKILL.md can run 
 - `config/brand.yaml` - Colors, fonts, layout, reserved-panel geometry, image finish
 - `config/news_sources.yaml` - Google News query buckets, RSS feeds, scoring rules
 
+## Deploy
+CI (`.github/workflows/docker-publish.yml`) only builds and pushes the image to GHCR - it does not
+deploy to the server. Getting a new image onto the box running the scheduled pipeline is a manual
+step:
+
+```bash
+ssh <server>
+docker pull ghcr.io/vbkatarnaware/moatdaily:latest
+docker image prune -f   # always run this - see below
+```
+
+**Always run `docker image prune -f` right after every pull.** Each `docker pull` of `:latest`
+leaves the previous image behind as an untagged, undeleted ~3.5GB blob. On 2026-07-07 a week of
+deploys without this step filled the EC2 root volume to 100%, which crashed the cron scheduler's
+SQLite state file and silently skipped every posting slot that day. Two safety nets now also run
+from the server's crontab in case this step is ever skipped:
+- `scripts/docker_prune.sh` - daily scheduled `docker image prune -f`
+- `scripts/check_disk_space.sh` - warns in `logs/disk_check.log` if disk usage crosses 85%, catching
+  any other future cause of disk growth (not just Docker images)
+
 ## Tech Stack
 - **Python 3.11+** (Playwright, Jinja2, Pillow, opencv-contrib-python-headless, rembg, feedparser, gspread)
 - **Google News search RSS** (free, no key, India geo-targeted) + curated publisher RSS; **Currents API** optional
